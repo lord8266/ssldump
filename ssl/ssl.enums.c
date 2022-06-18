@@ -2912,6 +2912,25 @@ static int decode_extension_ec_point_formats(ssl,dir,seg,data)
     return(0);
   }
 
+static int decode_extension_supported_versions(ssl,dir,seg,data)
+  ssl_obj *ssl;
+  int dir;
+  segment *seg;
+  Data *data;
+{
+    int r;
+    UINT4 len, version;
+    SSL_DECODE_UINT16(ssl, "extensions length", 0, data, &len);
+    LF;
+    if (dir == DIR_I2R) SSL_DECODE_UINT8(ssl, "supported versions length", 0, data, &len);
+    while (len) {
+        SSL_DECODE_UINT16(ssl, "supported version", 0, data, &version);
+        explain(ssl, "version: %u.%u\n", (version>>8)&0xff, version&0xff);
+        len -= 2;
+    }
+    if (dir == DIR_R2I) ssl->version = version;
+}
+
 decoder extension_decoder[] = {
 	{
 		0,
@@ -3126,7 +3145,7 @@ decoder extension_decoder[] = {
         {
                 43,
                 "supported_versions",
-                decode_extension
+                decode_extension_supported_versions
         },
         {
                 44,

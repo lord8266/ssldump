@@ -268,15 +268,15 @@ int ssl_expand_record(ssl,q,direction,data,len)
       explain(ssl,"  Short record: %u bytes available (expecting: %u)\n",length,d.len);
       return(0);
     }
+    version = ssl->version ? ssl->version : (vermaj*256+vermin);
    
     P_(P_RH){
-       explain(ssl," V%d.%d(%d)",vermaj,vermin,length);
+       explain(ssl," V%d.%d(%d)",(version>>8)&0xff,version&0xff,length);
        json_object_object_add(jobj, "record_len", json_object_new_int(length));
-       snprintf(verstr,8,"%d.%d",vermaj,vermin);
+       snprintf(verstr,8,"%d.%d",(version>>8)&0xff,version&0xff);
        json_object_object_add(jobj, "record_ver", json_object_new_string(verstr));
     }
 
-    version=vermaj*256+vermin;
     
     r=ssl_decode_record(ssl,ssl->decoder,direction,ct,version,&d);
 
