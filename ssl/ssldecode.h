@@ -73,6 +73,7 @@ int ssl_update_handshake_messages PROTO_LIST((ssl_obj *ssl,
   Data *data));
 int ssl_decode_record PROTO_LIST((ssl_obj *ssl,ssl_decoder *dec,int direction,
   int ct,int version,Data *d));
+int ssl_tls13_generate_keying_material PROTO_LIST((ssl_obj *obj,ssl_decoder *dec));
 
 
 #endif

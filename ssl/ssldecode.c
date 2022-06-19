@@ -91,6 +91,10 @@ struct ssl_decoder_ {
      int ephemeral_rsa;
      Data *PMS;
      Data *MS;
+     Data *SHTS;//Server Handshake traffic secret
+     Data *CHTS;//Client Handshake traffic secret
+     Data *STS;//Server traffic Secret
+     Data *CTS;//Client traffic secret
      Data *handshake_messages;
      Data *session_hash;
      ssl_rec_decoder *c_to_s;
@@ -115,7 +119,7 @@ static int ssl_generate_keying_material PROTO_LIST((ssl_obj *ssl,
   ssl_decoder *d));
 static int ssl_generate_session_hash PROTO_LIST((ssl_obj *ssl,
   ssl_decoder *d));
-static int ssl_read_key_log_file PROTO_LIST((ssl_decoder *d));
+static int ssl_read_key_log_file PROTO_LIST((ssl_obj* obj,ssl_decoder *d));
 #endif
 
 static int ssl_create_session_lookup_key PROTO_LIST((ssl_obj *ssl,
@@ -320,19 +324,23 @@ int ssl_process_server_session_id(ssl,d,msg,len)
     
     INIT_DATA(idd,msg,len);
     
-    /* First check to see if the client tried to restore */
-    if(d->session_id){
-      /* Now check to see if we restored */
-      if((r=r_data_compare(&idd,d->session_id)))
-	ABORT(r);
+    if (ssl->version==TLSV13_VERSION){
+    // TODO: TLSv13 Session
+    } else {
+      /* First check to see if the client tried to restore */
+      if(d->session_id){
+        /* Now check to see if we restored */
+        if((r=r_data_compare(&idd,d->session_id)))
+          ABORT(r);
 
-      /* Now try to look up the session. We may not be able
-         to find it if, for instance, the original session
-         was initiated with something other than static RSA */
-      if((r=ssl_restore_session(ssl,d)))
-        ABORT(r);
+        /* Now try to look up the session. We may not be able
+           to find it if, for instance, the original session
+           was initiated with something other than static RSA */
+        if((r=ssl_restore_session(ssl,d)))
+          ABORT(r);
 
-      restored=1;
+        restored=1;
+      }
     }
     
     _status=0;
@@ -365,7 +373,7 @@ int ssl_process_client_session_id(ssl,d,msg,len)
       //todo: better save and destroy only when successfully read key log
       r_data_destroy(&d->MS);
 
-      if(d->ctx->ssl_key_log_file && (ssl_read_key_log_file(d)==0) && d->MS)
+      if(d->ctx->ssl_key_log_file && (ssl_read_key_log_file(ssl, d)==0) && d->MS)// TODO: Will not save TLSv13
       {
         //we found master secret for session in keylog
         //try to save session
@@ -620,7 +628,7 @@ int ssl_process_client_key_exchange(ssl,d,msg,len)
     r_data_destroy(&d->MS);
 
     if(!d->ctx->ssl_key_log_file ||
-       ssl_read_key_log_file(d) ||
+       ssl_read_key_log_file(ssl,d) ||
        !d->MS){
       if(ssl->cs->kex!=KEX_RSA)
 	return(-1);
@@ -1086,6 +1094,30 @@ static int ssl_generate_keying_material(ssl,d)
     return(_status);
   }
 
+static int hkdf_extract(ssl,d,salt,ikm,out)
+  ssl_obj *ssl;
+  ssl_decoder *d;
+  Data *salt;
+  Data *ikm;
+  Data *out;
+  {
+
+
+  }
+
+int ssl_tls13_generate_keying_material(ssl,d)
+  ssl_obj* ssl;
+  ssl_decoder *d;
+{
+   if (!(d->ctx->ssl_key_log_file && ssl_read_key_log_file(ssl, d)==0 && 
+     d->SHTS && d->CHTS && d->STS && d->CTS)){
+     printf("Unable to read TLSv13 keys\n");
+     return -1;
+   }
+  printf("Read all TLSv13 keys\n");
+  
+}
+
 static int ssl_generate_session_hash(ssl,d)
   ssl_obj *ssl;
   ssl_decoder *d;
@@ -1134,36 +1166,68 @@ static int ssl_generate_session_hash(ssl,d)
     return(_status);
   }
 
-static int ssl_read_key_log_file(d)
+static int read_hex_string(char *str, UCHAR *buf, int n) {
+  unsigned int t;
+  int i;
+  for (i = 0; i < n; i++) {
+    if (sscanf(str + i * 2, "%02x", &t) != 1)
+      return -1;
+    buf[i] = (char)t;
+  }
+  return 0;
+}
+static int ssl_read_key_log_file(ssl,d)
+  ssl_obj *ssl;
   ssl_decoder *d;
   {
     int r,_status,n,i;
     unsigned int t;
     size_t l=0;
-    char *line,*label_data;
-
-    while ((n=getline(&line,&l,d->ctx->ssl_key_log_file))!=-1) {
-      if(n==(d->client_random->len*2)+112 &&
-	 !strncmp(line,"CLIENT_RANDOM",13)) {
-
-	if(!(label_data=malloc((d->client_random->len*2)+1)))
-	  ABORT(r);
-
-        for(i=0;i<d->client_random->len;i++)
-	  if(snprintf(label_data+(i*2),3,"%02x",d->client_random->data[i])!=2)
-	    ABORT(r);
-
-	if(STRNICMP(line+14,label_data,64))
-	  continue;
-
-	if((r=r_data_alloc(&d->MS,48)))
-	  ABORT(r);
-
-        for(i=0; i < d->MS->len; i++) {
-	  if(sscanf(line+14+65+(i*2),"%2x",&t)!=1)
-	    ABORT(r);
-	  *(d->MS->data+i)=(char)t;
-	}
+    char *line, *d_client_random, *label, *client_random, *secret;
+    if (ssl->version==TLSV13_VERSION && !ssl->cs)// ssl->cs is not set when called from ssl_process_client_session_id
+      ABORT(r);
+    if (!(d_client_random = malloc((d->client_random->len * 2) + 1)))
+      ABORT(r);
+    for (i = 0; i < d->client_random->len; i++)
+      if (snprintf(d_client_random + (i * 2), 3, "%02x", d->client_random->data[i]) != 2)
+        ABORT(r);
+    while ((n = getline(&line, &l, d->ctx->ssl_key_log_file)) != -1) {
+      if (line[n-1] =='\n') line[n-1] = '\0';
+      if (!(label=strtok(line, " "))) continue;
+      if (!(client_random=strtok(NULL, " ")) || strlen(client_random)!=64 || STRNICMP(client_random, d_client_random, 64)) continue;
+      if (!(secret=strtok(NULL, " ")) || strlen(secret)!=(ssl->version==TLSV13_VERSION?ssl->cs->dig_len*2:96)) continue;
+      if (!strncmp(label, "CLIENT_RANDOM", 13)) {
+        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
+        if ((r=r_data_alloc(&d->MS, 48)))
+          ABORT(r);
+        if (read_hex_string(secret, d->MS->data, 48))
+          ABORT(r);
+      }
+      if (ssl->version!=TLSV13_VERSION) continue;
+      if (!strncmp(label, "SERVER_HANDSHAKE_TRAFFIC_SECRET", 31)){
+        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
+        if ((r=r_data_alloc(&d->SHTS, ssl->cs->dig_len)))
+          ABORT(r);
+        if (read_hex_string(secret, d->SHTS->data, ssl->cs->dig_len))
+          ABORT(r);
+      } else if (!strncmp(label, "CLIENT_HANDSHAKE_TRAFFIC_SECRET", 31)){
+        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
+        if ((r=r_data_alloc(&d->CHTS, ssl->cs->dig_len)))
+          ABORT(r);
+        if (read_hex_string(secret, d->CHTS->data, ssl->cs->dig_len))
+          ABORT(r);
+      } else if (!strncmp(label, "SERVER_TRAFFIC_SECRET_0", 23)){
+        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
+        if ((r=r_data_alloc(&d->STS, ssl->cs->dig_len)))
+          ABORT(r);
+        if (read_hex_string(secret, d->STS->data, ssl->cs->dig_len))
+          ABORT(r);
+      } else if (!strncmp(label, "CLIENT_TRAFFIC_SECRET_0", 23)){
+        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
+        if ((r=r_data_alloc(&d->CTS, ssl->cs->dig_len)))
+          ABORT(r);
+        if (read_hex_string(secret, d->CTS->data, ssl->cs->dig_len))
+          ABORT(r);
       }
       /*
 	 Eventually add support for other labels defined here:

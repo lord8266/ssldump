@@ -425,8 +425,6 @@ static int decode_HandshakeType_ServerHello(ssl,dir,seg,data)
     ja3s_c_str = calloc(6, 1);
     snprintf(ja3s_c_str, 6, "%u", ssl->cipher_suite);
 
-    ssl_process_server_session_id(ssl,ssl->decoder,session_id.data,
-      session_id.len);
 
     P_(P_HL) LF;
     SSL_DECODE_ENUM(ssl,"compressionMethod",1,compression_method_decoder,P_HL,data,0);
@@ -456,6 +454,12 @@ static int decode_HandshakeType_ServerHello(ssl,dir,seg,data)
       if(ja3s_ex_str && ja3s_ex_str[strlen(ja3s_ex_str) - 1] == '-')
           ja3s_ex_str[strlen(ja3s_ex_str) - 1] = '\0';
     }
+    if (ssl->version==TLSV13_VERSION){
+      ssl_tls13_generate_keying_material(ssl,ssl->decoder);
+    }
+    //Here it is known whether tlsv12 or tlsv13
+    ssl_process_server_session_id(ssl,ssl->decoder,session_id.data,
+      session_id.len);
 
     if(!ja3s_ver_str) {
 	ja3s_ver_str = calloc(1, 1);
