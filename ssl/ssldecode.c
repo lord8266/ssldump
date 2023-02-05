@@ -48,6 +48,9 @@
 #include "sslprint.h"
 #include "ssl.enums.h"
 #ifdef OPENSSL
+#include <openssl/types.h>
+#include <openssl/core_names.h>
+#include <openssl/kdf.h>
 #include <openssl/ssl.h>
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
@@ -394,25 +397,36 @@ int ssl_process_client_session_id(ssl,d,msg,len)
     return(0);
 #endif      
   }
+int ssl_process_handshake_finished(ssl_obj* ssl,ssl_decoder *dec, Data *data){
+   if (ssl->version==TLSV13_VERSION){
+    if (ssl->direction==DIR_I2R){
+      dec->c_to_s = dec->c_to_s_n;
+      dec->s_to_c = dec->s_to_c_n;
+      dec->s_to_c_n = 0;
+      dec->c_to_s_n = 0;
+    }
+   }
+}
 
 int ssl_process_change_cipher_spec(ssl,d,direction)
   ssl_obj *ssl;
   ssl_decoder *d;
   int direction;
   {
-#ifdef OPENSSL    
-    if(direction==DIR_I2R){
-      d->c_to_s=d->c_to_s_n;
-      d->c_to_s_n=0;
-      if(d->c_to_s) ssl->process_ciphertext |= direction;
+#ifdef OPENSSL
+    if (ssl->version!=TLSV13_VERSION){
+       if(direction==DIR_I2R){
+         d->c_to_s=d->c_to_s_n;
+         d->c_to_s_n=0;
+         if(d->c_to_s) ssl->process_ciphertext |= direction;
+       }
+       else {
+         d->s_to_c=d->s_to_c_n;
+         d->s_to_c_n=0;
+         if(d->s_to_c) ssl->process_ciphertext |= direction;      
+       }
     }
-    else{
-      d->s_to_c=d->s_to_c_n;
-      d->s_to_c_n=0;
-      if(d->s_to_c) ssl->process_ciphertext |= direction;      
-    }
-
-#endif    
+#endif  
     return(0);
   }
 int ssl_decode_record(ssl,dec,direction,ct,version,d)
@@ -451,7 +465,12 @@ int ssl_decode_record(ssl,dec,direction,ct,version,d)
     if(!(out=(UCHAR *)malloc(d->len)))
       ABORT(R_NO_MEMORY);
 
-    if((r=ssl_decode_rec_data(ssl,rd,ct,version,d->data,d->len,out,&outl))){
+	if (ssl->version==TLSV13_VERSION){
+      r=tls13_decode_rec_data(ssl,rd,ct,version,d->data,d->len,out,&outl);	
+	} else {
+      r=ssl_decode_rec_data(ssl,rd,ct,version,d->data,d->len,out,&outl);	
+    }
+    if(r) {
       ABORT(r);
     }
     
@@ -1094,28 +1113,109 @@ static int ssl_generate_keying_material(ssl,d)
     return(_status);
   }
 
-static int hkdf_extract(ssl,d,salt,ikm,out)
+static int hkdf_expand_label(ssl,d,secret,label,context,length,out)
   ssl_obj *ssl;
   ssl_decoder *d;
-  Data *salt;
-  Data *ikm;
-  Data *out;
+  Data *secret;
+  char *label;
+  Data *context;
+  uint16_t length;
+  UCHAR **out;
   {
+    int r;
+    EVP_KDF *kdf;
+    EVP_KDF_CTX *kctx;
+    OSSL_PARAM params[5], *p = params;
 
-
+    Data hkdf_label;
+    UCHAR *ptr;
+    //Construct HkdfLabel
+    hkdf_label.data = ptr = malloc(512);
+    *out = malloc(length);
+    *(uint16_t*)ptr = ntohs(length);
+    ptr+=2;
+    *(uint8_t*)ptr++ = 6+(label?strlen(label):0);
+    memcpy(ptr, "tls13 ", 6);
+    ptr+=6;
+    if (label) {
+      memcpy(ptr, label, strlen(label));
+      ptr+=strlen(label);
+    }
+    *(uint8_t*)ptr++ = context?context->len:0;
+    if (context) {
+      memcpy(ptr, context->data, context->len);
+      ptr+=context->len;
+    }
+    hkdf_label.len = ptr - hkdf_label.data;
+    CRDUMPD("hkdf_label", &hkdf_label);
+    // Load parameters
+    kdf = EVP_KDF_fetch(NULL, "HKDF", NULL);
+    kctx = EVP_KDF_CTX_new(kdf);
+    EVP_KDF_free(kdf);
+    *p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_MODE,"EXPAND_ONLY",strlen("EXPAND_ONLY"));
+    *p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST,
+                                         digests[ssl->cs->dig-0x40], strlen(digests[ssl->cs->dig-0x40]));
+    *p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY,
+                                            secret->data, secret->len);
+    *p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO,
+                                            hkdf_label.data, hkdf_label.len);
+    *p = OSSL_PARAM_construct_end();
+    if (EVP_KDF_derive(kctx, *out, length, params) <= 0) {
+      fprintf(stderr, "Failed to derive\n");
+    }
+  CRDUMP("out_hkdf", *out, length);
+  return 0;
+abort:
+    return r;
   }
 
 int ssl_tls13_generate_keying_material(ssl,d)
   ssl_obj* ssl;
   ssl_decoder *d;
 {
+  int r,_status;
+  Data out;
+  UCHAR *s_wk_h,*s_iv_h,*c_wk_h,*c_iv_h,
+        *s_wk,*s_iv,*c_wk,*c_iv;
    if (!(d->ctx->ssl_key_log_file && ssl_read_key_log_file(ssl, d)==0 && 
      d->SHTS && d->CHTS && d->STS && d->CTS)){
      printf("Unable to read TLSv13 keys\n");
-     return -1;
+     ABORT(-1);
    }
   printf("Read all TLSv13 keys\n");
-  
+  hkdf_expand_label(ssl, d, d->SHTS, "key", NULL, 32, &s_wk_h);
+  hkdf_expand_label(ssl, d, d->SHTS, "iv", NULL, 12, &s_iv_h);
+  hkdf_expand_label(ssl, d, d->CHTS, "key", NULL, 32, &c_wk_h);
+  hkdf_expand_label(ssl, d, d->CHTS, "iv", NULL, 12, &c_iv_h);
+  hkdf_expand_label(ssl, d, d->STS, "key", NULL, 32, &s_wk);
+  hkdf_expand_label(ssl, d, d->STS, "iv", NULL, 12, &s_iv);
+  hkdf_expand_label(ssl, d, d->CTS, "key", NULL, 32, &c_wk);
+  hkdf_expand_label(ssl, d, d->CTS, "iv", NULL, 12, &c_iv);
+  CRDUMP("Server Handshake Write key", s_wk_h,32 );
+  CRDUMP("Server Handshake IV", s_iv_h, 12);
+  CRDUMP("Client Handshake Write key", c_wk_h,32);
+  CRDUMP("Client Handshake IV", c_iv_h,12);
+  CRDUMP("Server Write key", s_wk,32);
+  CRDUMP("Server IV", s_iv,12);
+  CRDUMP("Client Write key",c_wk, 32);
+  CRDUMP("Client IV", c_iv,12);
+   
+  if((r=ssl_create_rec_decoder(&d->c_to_s_n,
+    ssl->cs,NULL,c_wk,c_iv)))
+    ABORT(r);
+  if((r=ssl_create_rec_decoder(&d->s_to_c_n,
+    ssl->cs,NULL,s_wk,s_iv)))
+    ABORT(r);
+  if((r=ssl_create_rec_decoder(&d->c_to_s,
+    ssl->cs,NULL,c_wk_h,c_iv_h)))
+    ABORT(r);
+  if((r=ssl_create_rec_decoder(&d->s_to_c,
+    ssl->cs,NULL,s_wk_h,s_iv_h)))
+    ABORT(r);
+  return 0;
+abort:
+  fprintf(stderr, "aborted\n");
+  return r;
 }
 
 static int ssl_generate_session_hash(ssl,d)

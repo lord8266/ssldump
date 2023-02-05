@@ -65,7 +65,7 @@ struct ssl_rec_decoder_ {
 #ifdef OPENSSL     
      EVP_CIPHER_CTX *evp;
 #endif     
-     UINT4 seq;
+     UINT8 seq;
 };
 
 
@@ -92,7 +92,9 @@ char *ciphers[]={
      "SEED",
      NULL,
      "aes-128-gcm",
-     "aes-256-gcm"
+     "aes-256-gcm",
+     "ChaCha20-Poly1305",
+     "aes-128-ccm",
 };
 
 
@@ -190,6 +192,73 @@ int ssl_destroy_rec_decoder(dp)
 #define MSB(a) ((a>>8)&0xff)
 #define LSB(a) (a&0xff)
 
+int tls13_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
+  ssl_obj *ssl;
+  ssl_rec_decoder *d;
+  int ct;
+  int version;
+  UCHAR *in;
+  int inl;
+  UCHAR *out;
+  int *outl;
+  {
+    int pad,i;
+    int r,encpadl,x,_status=0;
+    UCHAR aad[5],aead_nonce[12], *tag;
+    CRDUMP("CipherText",in,inl);
+    CRDUMPD("KEY",d->write_key);
+    CRDUMPD("IV",d->implicit_iv);
+    if (!IS_AEAD_CIPHER(d->cs)){
+      fprintf(stderr, "Non aead cipher in tls13\n");
+      ABORT(-1);
+    }
+    memcpy(aead_nonce, d->implicit_iv->data, 12);
+    printf("SEQ %ld\n", d->seq);
+    for (i = 0; i < 8; i++) { // AEAD NONCE according to RFC TLS1.3
+        aead_nonce[12 - 1 - i] ^= ((d->seq >> (i * 8)) & 0xFF);
+    }
+    d->seq++;
+    CRDUMP("NONCE",aead_nonce,12);
+    if(!EVP_DecryptInit_ex(d->evp,NULL,NULL,d->write_key->data,aead_nonce)){
+      fprintf(stderr,"Unable to init evp1\n");
+      ABORT(-1);
+    }
+    tag = in+(inl-16);
+    CRDUMP("Tag", tag, 16);
+    aad[0] = ct;
+    aad[1] = 0x03;
+    aad[2] = 0x03;
+    aad[3] = MSB(inl);
+    aad[4] = LSB(inl);
+    CRDUMP("AAD",aad,5);
+    inl-=16;
+    if (!EVP_DecryptUpdate(d->evp,NULL,outl,aad,5)){
+      fprintf(stderr,"Unable to update aad\n");
+      ABORT(-1);
+    }
+    //printf("OUTL %d\n",*outl);
+    CRDUMP("Real CipherText", in, inl);
+    if (!EVP_DecryptUpdate(d->evp,out,outl,in,inl)){
+      fprintf(stderr,"Unable to update with CipherText\n");
+      ABORT(-1);
+    }
+    //printf("OUTL %d\n",*outl);
+    if (!EVP_CIPHER_CTX_ctrl(d->evp,EVP_CTRL_GCM_SET_TAG,16,tag)){
+      fprintf(stderr,"Unable to set tag\n");
+      ABORT(-1);
+    }
+    if (!(x=EVP_DecryptFinal(d->evp,NULL,&x))) {
+      fprintf(stderr,"BAD MAC\n");
+      exit(1);
+      ABORT(SSL_BAD_MAC);
+    }
+
+	// Get additional data
+	// Get nonce
+abort:
+    ERR_print_errors_fp(stderr);	
+    return _status;
+}
 int ssl_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
   ssl_obj *ssl;
   ssl_rec_decoder *d;

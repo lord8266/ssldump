@@ -8,6 +8,7 @@
 #include <openssl/ssl.h>
 #endif
 #include "ssl.enums.h"
+
 static int decode_extension(ssl_obj *ssl, int dir, segment *seg, Data *data);
 static int decode_server_name(ssl_obj *ssl, int dir, segment *seg, Data *data);
 static int decode_ContentType_ChangeCipherSpec(ssl,dir,seg,data)
@@ -517,6 +518,72 @@ static int decode_HandshakeType_ServerHello(ssl,dir,seg,data)
     return(0);
 
   }
+
+static int decode_HandshakeType_SessionTicket(ssl,dir,seg,data)
+    ssl_obj *ssl;
+    int dir;
+    segment *seg;
+    Data *data;
+{
+    int r;
+    UINT4 exlen, ex, val;
+    LF;
+    SSL_DECODE_UINT32(ssl, "ticket_lifetime",0, data, &val);
+    explain(ssl, "ticket_lifetime %u\n", val);
+    SSL_DECODE_UINT32(ssl, "ticket_age_add", 0,data, &val);
+    explain(ssl, "ticket_age_add %u\n", val);
+    SSL_DECODE_UINT8(ssl, "ticket_nonce",0,data, &val);
+    if (val>data->len) {
+      fprintf(stderr, "Short read: %d bytes available (expecting %d)\n", data->len, val);
+      ERETURN(R_EOD);
+    }
+    CRDUMP("ticket_nonce", data->data, val);
+    data->data+=val;data->len-=val;
+    SSL_DECODE_UINT16(ssl, "ticket",0,data, &val);
+    if (val>data->len) {
+      fprintf(stderr, "Short read: %d bytes available (expecting %d)\n", data->len, val);
+      ERETURN(R_EOD);
+    }
+    CRDUMP("ticket", data->data, val);
+    data->data+=val;data->len-=val;
+    SSL_DECODE_UINT16(ssl, "exlen", 0, data, &exlen);
+    LF;
+    extern decoder extension_decoder[]; // TODO: On top
+    if (exlen) {
+      while (data->len) {
+        SSL_DECODE_UINT16(ssl, "extension type", 0, data, &ex);
+        if (ssl_decode_switch(ssl, extension_decoder, ex, dir, seg, data) == R_NOT_FOUND) {
+          decode_extension(ssl, dir, seg, data);
+          P_(P_RH) { explain(ssl, "Extension type: %u not yet implemented in ssldump\n", ex); }
+          continue;
+        }
+        LF;
+      }
+    }
+}
+static int decode_HandshakeType_EncryptedExtensions(ssl,dir,seg,data)
+  ssl_obj *ssl;
+  int dir;
+  segment *seg;
+  Data *data;
+  {
+    int r;
+    UINT4 exlen, ex;
+    SSL_DECODE_UINT16(ssl, 0, 0, data, &exlen);
+    LF;
+    extern decoder extension_decoder[]; // TODO: On top
+    if (exlen) {
+      while (data->len) {
+        SSL_DECODE_UINT16(ssl, "extension type", 0, data, &ex);
+        if (ssl_decode_switch(ssl, extension_decoder, ex, dir, seg, data) == R_NOT_FOUND) {
+          decode_extension(ssl, dir, seg, data);
+          P_(P_RH) { explain(ssl, "Extension type: %u not yet implemented in ssldump\n", ex); }
+          continue;
+        }
+        LF;
+      }
+    }
+  }
 static int decode_HandshakeType_Certificate(ssl,dir,seg,data)
   ssl_obj *ssl;
   int dir;
@@ -525,7 +592,7 @@ static int decode_HandshakeType_Certificate(ssl,dir,seg,data)
   {
 
 
-    UINT4 len;
+    UINT4 len,exlen;
     Data cert;
     int r;
 
@@ -535,6 +602,9 @@ static int decode_HandshakeType_Certificate(ssl,dir,seg,data)
 
     LF;
     ssl_update_handshake_messages(ssl,data);
+    if (ssl->version==TLSV13_VERSION){
+      SSL_DECODE_UINT8(ssl,"certificate request context len",0,data,&len);
+    }
     SSL_DECODE_UINT24(ssl,"certificates len",0,data,&len);
 
     json_object_object_add(jobj, "cert_chain", json_object_new_array());
@@ -544,6 +614,13 @@ static int decode_HandshakeType_Certificate(ssl,dir,seg,data)
         0,data,&cert);
       sslx_print_certificate(ssl,&cert,P_ND);
       len-=(cert.len + 3);
+      if (ssl->version==TLSV13_VERSION) {
+        SSL_DECODE_UINT16(ssl,"certificate extensions len",0,data,&exlen);
+        len-=2;
+        len-=exlen; // TODO: Implement certificate extensions
+        data->data+=exlen;
+        data->len-=exlen;
+      }
     }
 
     return(0);
@@ -736,6 +813,7 @@ static int decode_HandshakeType_Finished(ssl,dir,seg,data)
        break;
    }
 
+   ssl_process_handshake_finished(ssl,ssl->decoder,data);
    return (0);
 
   }
@@ -754,6 +832,16 @@ decoder HandshakeType_decoder[]={
 		2,
 		"ServerHello",
 		decode_HandshakeType_ServerHello
+	},
+	{
+		4,
+		"SessionTicket",
+		decode_HandshakeType_SessionTicket
+	},
+	{
+		8,
+		"EncryptedExtensions",
+		decode_HandshakeType_EncryptedExtensions
 	},
 	{
 		11,
@@ -2843,42 +2931,24 @@ static int decode_extension(ssl,dir,seg,data)
     return(0);
   }
 
-// Extension #10 supported_groups (renamed from "elliptic_curves")
-static int decode_extension_supported_groups(ssl,dir,seg,data)
-  ssl_obj *ssl;
-  int dir;
-  segment *seg;
-  Data *data;
-  {
-    int r,p;
-    UINT4 l,g;
-    char *ja3_ec_str = NULL;
-    SSL_DECODE_UINT16(ssl,"extension length",0,data,&l);
-
-    if(dir==DIR_I2R){
-      SSL_DECODE_UINT16(ssl,"supported_groups list length",0,data,&l);
-      LF;
-      while(l) {
-	p=data->len;
-	SSL_DECODE_UINT16(ssl, "supported group", 0, data, &g);
-        if(!ja3_ec_str)
-            ja3_ec_str = calloc(7, 1);
-        else
-            ja3_ec_str = realloc(ja3_ec_str, strlen(ja3_ec_str) + 7);
-	snprintf(ja3_ec_str + strlen(ja3_ec_str), 7, "%u-", g);
-	l-=(p-data->len);
-      }
-      if(ja3_ec_str && ja3_ec_str[strlen(ja3_ec_str) - 1] == '-')
-          ja3_ec_str[strlen(ja3_ec_str) - 1] = '\0';
-    }
-    else{
-      data->len-=l;
-      data->data+=l;
-    }
-    ssl->cur_ja3_ec_str = ja3_ec_str;
-    return(0);
-  }
-
+static decoder ec_point_formats_decoder[]={
+	{
+		0,
+		"uncompressed",
+		NULL
+	},
+	{
+		1,
+		"ansiX962_compressed_prime",
+		NULL
+	},
+	{
+		2,
+		"ansiX962_compressed_char2",
+		NULL
+	},
+{-1}
+};
 // Extension #11 ec_point_formats
 static int decode_extension_ec_point_formats(ssl,dir,seg,data)
   ssl_obj *ssl;
@@ -2896,7 +2966,8 @@ static int decode_extension_ec_point_formats(ssl,dir,seg,data)
       LF;
       while(l) {
 	p=data->len;
-	SSL_DECODE_UINT8(ssl, "ec point format", 0, data, &f);
+	SSL_DECODE_ENUM(ssl, NULL,1, ec_point_formats_decoder, P_HL, data, &f);
+       LF;
         if(!ja3_ecp_str)
             ja3_ecp_str = calloc(5, 1);
         else
@@ -2926,13 +2997,108 @@ static int decode_extension_supported_versions(ssl,dir,seg,data)
     UINT4 len, version;
     SSL_DECODE_UINT16(ssl, "extensions length", 0, data, &len);
     LF;
-    if (dir == DIR_I2R) SSL_DECODE_UINT8(ssl, "supported versions length", 0, data, &len);
+    if (dir == DIR_I2R) SSL_DECODE_UINT8(ssl, "supported versions length", 0, data, &len);//client sends extension<..>
     while (len) {
         SSL_DECODE_UINT16(ssl, "supported version", 0, data, &version);
-        explain(ssl, "version: %u.%u\n", (version>>8)&0xff, version&0xff);
+        explain(ssl, "version: %u.%u", (version>>8)&0xff, version&0xff);
         len -= 2;
+		if (len) printf("\n");
     }
     if (dir == DIR_R2I) ssl->version = version;
+}
+
+decoder supported_groups_decoder[] = {
+    {
+        0x0017,
+        "secp256r1",
+        NULL,
+    },
+    {
+        0x0018,
+        "secp384r1",
+        NULL,
+    },
+    {
+        0x0019,
+        "secp521r1",
+        NULL,
+    },
+    {
+        0x001d,
+        "x25519",
+        NULL,
+    },
+    {
+        0x001e,
+        "x448",
+        NULL
+    },
+    {
+        0x0100,
+        "ffdhe2048",
+        NULL,
+    },
+    {
+        0x0101,
+        "ffdhe3072",
+        NULL,
+    },
+    {
+        0x0102,
+        "ffdhe4096",
+        NULL,
+    },
+    {
+        0x0103,
+        "ffdhe6144",
+        NULL
+    },
+    {
+        0x0104,
+        "ffdhe8192",
+        NULL
+    }
+};
+// Extension #10 supported_groups (renamed from "elliptic_curves")
+static int decode_extension_supported_groups(ssl,dir,seg,data)
+    ssl_obj *ssl;
+    int dir;
+    segment *seg;
+    Data *data;
+{
+    int r;
+    UINT4 f, l;
+    char *ja3_ec_str = NULL;
+    SSL_DECODE_UINT16(ssl, "extensions length", 0, data, &l);
+    LF;
+    if (dir == DIR_I2R) {
+        SSL_DECODE_UINT16(ssl, "supported groups length", 0, data, &l);
+        while (l>=2) {
+	        if (ssl_decode_enum(ssl, NULL, 2, supported_groups_decoder, P_HL, data, &f)
+                    == R_NOT_FOUND){
+                if (0x01fc <= f && f <= 0x01ff) {
+                    explain(ssl, "ffdhe_private_use");
+                } else if (0xfe00 <= f && f <= 0xfeff) {
+                    explain(ssl, "ecdhe_private_use");
+                } else {
+                    explain(ssl, "unknown: %u", f);
+                }
+            }
+            LF;
+            if(!ja3_ec_str)
+                ja3_ec_str = calloc(7, 1);
+            else
+                ja3_ec_str = realloc(ja3_ec_str, strlen(ja3_ec_str) + 7);
+        	snprintf(ja3_ec_str + strlen(ja3_ec_str), 7, "%u-", f);
+        	l-=2;
+        }
+        if(ja3_ec_str && ja3_ec_str[strlen(ja3_ec_str) - 1] == '-')
+            ja3_ec_str[strlen(ja3_ec_str) - 1] = '\0';
+    } else {
+        data->len-=l;
+        data->data+=l;
+    }
+    ssl->cur_ja3_ec_str = ja3_ec_str;
 }
 
 decoder extension_decoder[] = {
