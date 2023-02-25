@@ -48,8 +48,9 @@
 #include "sslprint.h"
 #include "ssl.enums.h"
 #ifdef OPENSSL
-#include <openssl/types.h>
-#include <openssl/core_names.h>
+//#include <openssl/types.h>
+//#include <openssl/core_names.h>
+#include <openssl/err.h>
 #include <openssl/kdf.h>
 #include <openssl/ssl.h>
 #include <openssl/hmac.h>
@@ -1123,15 +1124,16 @@ static int hkdf_expand_label(ssl,d,secret,label,context,length,out)
   UCHAR **out;
   {
     int r;
-    EVP_KDF *kdf;
-    EVP_KDF_CTX *kctx;
-    OSSL_PARAM params[5], *p = params;
+	size_t outlen = length;
+ 	EVP_PKEY_CTX *pctx;
+
+ 	pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL);
 
     Data hkdf_label;
     UCHAR *ptr;
+
     //Construct HkdfLabel
     hkdf_label.data = ptr = malloc(512);
-    *out = malloc(length);
     *(uint16_t*)ptr = ntohs(length);
     ptr+=2;
     *(uint8_t*)ptr++ = 6+(label?strlen(label):0);
@@ -1149,23 +1151,36 @@ static int hkdf_expand_label(ssl,d,secret,label,context,length,out)
     hkdf_label.len = ptr - hkdf_label.data;
     CRDUMPD("hkdf_label", &hkdf_label);
     // Load parameters
-    kdf = EVP_KDF_fetch(NULL, "HKDF", NULL);
-    kctx = EVP_KDF_CTX_new(kdf);
-    EVP_KDF_free(kdf);
-    *p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_MODE,"EXPAND_ONLY",strlen("EXPAND_ONLY"));
-    *p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST,
-                                         digests[ssl->cs->dig-0x40], strlen(digests[ssl->cs->dig-0x40]));
-    *p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY,
-                                            secret->data, secret->len);
-    *p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO,
-                                            hkdf_label.data, hkdf_label.len);
-    *p = OSSL_PARAM_construct_end();
-    if (EVP_KDF_derive(kctx, *out, length, params) <= 0) {
-      fprintf(stderr, "Failed to derive\n");
-    }
-  CRDUMP("out_hkdf", *out, length);
-  return 0;
+    *out = malloc(length);
+ 	if (EVP_PKEY_derive_init(pctx) <= 0) {
+		fprintf(stderr, "EVP_PKEY_derive_init failed\n");
+	}
+ 	    /* Error */
+	if (EVP_PKEY_CTX_hkdf_mode(pctx, EVP_PKEY_HKDEF_MODE_EXPAND_ONLY)<=0) {
+		fprintf(stderr, "EVP_PKEY_CTX_hkdf_mode failed\n");
+		goto abort;
+	}
+ 	if (EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_get_digestbyname(digests[ssl->cs->dig-0x40])) <= 0) {
+		fprintf(stderr, "EVP_PKEY_CTX_set_hkdf_md failed\n");
+		goto abort;
+	}
+ 	if (EVP_PKEY_CTX_set1_hkdf_key(pctx, secret->data, secret->len) <= 0) {
+		fprintf(stderr, "EVP_PKEY_CTX_set_hkdf_md failed\n");
+		goto abort;
+	}
+ 	if (EVP_PKEY_CTX_add1_hkdf_info(pctx, hkdf_label.data, hkdf_label.len) <= 0) {
+		fprintf(stderr, "EVP_PKEY_CTX_add1_hkdf_info failed\n");
+		goto abort;
+	}
+ 	if (EVP_PKEY_derive(pctx, *out, &outlen) <= 0) {
+		fprintf(stderr, "EVP_PKEY_derive failed\n");
+		goto abort;
+	}
+
+  	CRDUMP("out_hkdf", *out, outlen);
+	return 0;
 abort:
+	ERR_print_errors_fp(stderr);
     return r;
   }
 
@@ -1183,14 +1198,38 @@ int ssl_tls13_generate_keying_material(ssl,d)
      ABORT(-1);
    }
   printf("Read all TLSv13 keys\n");
-  hkdf_expand_label(ssl, d, d->SHTS, "key", NULL, 32, &s_wk_h);
-  hkdf_expand_label(ssl, d, d->SHTS, "iv", NULL, 12, &s_iv_h);
-  hkdf_expand_label(ssl, d, d->CHTS, "key", NULL, 32, &c_wk_h);
-  hkdf_expand_label(ssl, d, d->CHTS, "iv", NULL, 12, &c_iv_h);
-  hkdf_expand_label(ssl, d, d->STS, "key", NULL, 32, &s_wk);
-  hkdf_expand_label(ssl, d, d->STS, "iv", NULL, 12, &s_iv);
-  hkdf_expand_label(ssl, d, d->CTS, "key", NULL, 32, &c_wk);
-  hkdf_expand_label(ssl, d, d->CTS, "iv", NULL, 12, &c_iv);
+  if (hkdf_expand_label(ssl, d, d->SHTS, "key", NULL, 32, &s_wk_h)) {
+		fprintf(stderr, "s_wk_h hkdf_expand_label failed\n");
+		goto abort;
+  }
+  if (hkdf_expand_label(ssl, d, d->SHTS, "iv", NULL, 12, &s_iv_h)) {
+	  fprintf(stderr, "s_iv_h hkdf_expand_label failed\n");
+	  goto abort;
+  }
+  if (hkdf_expand_label(ssl, d, d->CHTS, "key", NULL, 32, &c_wk_h)) {
+	  fprintf(stderr, "c_wk_h hkdf_expand_label failed\n");
+	  goto abort;
+  }
+  if (hkdf_expand_label(ssl, d, d->CHTS, "iv", NULL, 12, &c_iv_h)) {
+	  fprintf(stderr, "c_iv_h hkdf_expand_label failed\n");
+	  goto abort;
+  }
+  if (hkdf_expand_label(ssl, d, d->STS, "key", NULL, 32, &s_wk)) {
+	  fprintf(stderr, "s_wk hkdf_expand_label failed\n");
+	  goto abort;
+  }
+  if (hkdf_expand_label(ssl, d, d->STS, "iv", NULL, 12, &s_iv)) {
+	  fprintf(stderr, "s_iv hkdf_expand_label failed\n");
+	  goto abort;
+  }
+  if (hkdf_expand_label(ssl, d, d->CTS, "key", NULL, 32, &c_wk)) {
+	  fprintf(stderr, "c_wk hkdf_expand_label failed\n");
+	  goto abort;
+  }
+  if (hkdf_expand_label(ssl, d, d->CTS, "iv", NULL, 12, &c_iv)) {
+	  fprintf(stderr, "c_iv hkdf_expand_label failed\n");
+	  goto abort;
+  }
   CRDUMP("Server Handshake Write key", s_wk_h,32 );
   CRDUMP("Server Handshake IV", s_iv_h, 12);
   CRDUMP("Client Handshake Write key", c_wk_h,32);
@@ -1295,7 +1334,9 @@ static int ssl_read_key_log_file(ssl,d)
       if (line[n-1] =='\n') line[n-1] = '\0';
       if (!(label=strtok(line, " "))) continue;
       if (!(client_random=strtok(NULL, " ")) || strlen(client_random)!=64 || STRNICMP(client_random, d_client_random, 64)) continue;
-      if (!(secret=strtok(NULL, " ")) || strlen(secret)!=(ssl->version==TLSV13_VERSION?ssl->cs->dig_len*2:96)) continue;
+      secret=strtok(NULL, " ");
+	  printf("secret:%s len:%ld version:%d=%d\n",secret, strlen(secret), ssl->version, TLSV13_VERSION);
+      if (!(secret) || strlen(secret)!=(ssl->version==TLSV13_VERSION?ssl->cs->dig_len*2:96)) continue;
       if (!strncmp(label, "CLIENT_RANDOM", 13)) {
         printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
         if ((r=r_data_alloc(&d->MS, 48)))

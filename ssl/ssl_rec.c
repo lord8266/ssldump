@@ -53,6 +53,7 @@
 #include <openssl/ssl.h>
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
+#include <openssl/err.h>
 #endif
 #include "ssldecode.h"
 #include "ssl_rec.h"
