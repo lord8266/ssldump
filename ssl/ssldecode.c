@@ -1198,7 +1198,8 @@ int ssl_tls13_generate_keying_material(ssl,d)
      ABORT(-1);
    }
   printf("Read all TLSv13 keys\n");
-  if (hkdf_expand_label(ssl, d, d->SHTS, "key", NULL, 32, &s_wk_h)) {
+  // It is 12 for all ciphers
+  if (hkdf_expand_label(ssl, d, d->SHTS, "key", NULL, ssl->cs->eff_bits/8, &s_wk_h)) {
 		fprintf(stderr, "s_wk_h hkdf_expand_label failed\n");
 		goto abort;
   }
@@ -1206,7 +1207,7 @@ int ssl_tls13_generate_keying_material(ssl,d)
 	  fprintf(stderr, "s_iv_h hkdf_expand_label failed\n");
 	  goto abort;
   }
-  if (hkdf_expand_label(ssl, d, d->CHTS, "key", NULL, 32, &c_wk_h)) {
+  if (hkdf_expand_label(ssl, d, d->CHTS, "key", NULL, ssl->cs->eff_bits/8, &c_wk_h)) {
 	  fprintf(stderr, "c_wk_h hkdf_expand_label failed\n");
 	  goto abort;
   }
@@ -1214,7 +1215,7 @@ int ssl_tls13_generate_keying_material(ssl,d)
 	  fprintf(stderr, "c_iv_h hkdf_expand_label failed\n");
 	  goto abort;
   }
-  if (hkdf_expand_label(ssl, d, d->STS, "key", NULL, 32, &s_wk)) {
+  if (hkdf_expand_label(ssl, d, d->STS, "key", NULL, ssl->cs->eff_bits/8, &s_wk)) {
 	  fprintf(stderr, "s_wk hkdf_expand_label failed\n");
 	  goto abort;
   }
@@ -1222,7 +1223,7 @@ int ssl_tls13_generate_keying_material(ssl,d)
 	  fprintf(stderr, "s_iv hkdf_expand_label failed\n");
 	  goto abort;
   }
-  if (hkdf_expand_label(ssl, d, d->CTS, "key", NULL, 32, &c_wk)) {
+  if (hkdf_expand_label(ssl, d, d->CTS, "key", NULL, ssl->cs->eff_bits/8, &c_wk)) {
 	  fprintf(stderr, "c_wk hkdf_expand_label failed\n");
 	  goto abort;
   }
