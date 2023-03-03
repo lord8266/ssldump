@@ -220,12 +220,24 @@ int tls13_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
     }
     d->seq++;
     CRDUMP("NONCE",aead_nonce,12);
+    tag = in+(inl-16);
+    CRDUMP("Tag", tag, 16);
+
+	if (!EVP_CIPHER_CTX_ctrl(d->evp, EVP_CTRL_AEAD_SET_IVLEN, 12, NULL)) {
+		fprintf(stderr, "Unable to set ivlen\n");
+		ABORT(-1);
+	}
+
+	if (!EVP_CIPHER_CTX_ctrl(d->evp, EVP_CTRL_AEAD_SET_TAG, 16, tag)) {
+		fprintf(stderr, "Unable to set tag\n");
+		ABORT(-1);
+	}
+
     if(!EVP_DecryptInit_ex(d->evp,NULL,NULL,d->write_key->data,aead_nonce)){
       fprintf(stderr,"Unable to init evp1\n");
       ABORT(-1);
     }
-    tag = in+(inl-16);
-    CRDUMP("Tag", tag, 16);
+
     aad[0] = ct;
     aad[1] = 0x03;
     aad[2] = 0x03;
@@ -233,6 +245,12 @@ int tls13_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
     aad[4] = LSB(inl);
     CRDUMP("AAD",aad,5);
     inl-=16;
+	if (d->cs->enc == 0x3e) {
+    	if (!EVP_DecryptUpdate(d->evp,NULL,outl,NULL,inl)){
+    	  fprintf(stderr,"Unable to update data length\n");
+    	  ABORT(-1);
+		}
+	}
     if (!EVP_DecryptUpdate(d->evp,NULL,outl,aad,5)){
       fprintf(stderr,"Unable to update aad\n");
       ABORT(-1);
@@ -243,16 +261,13 @@ int tls13_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
       fprintf(stderr,"Unable to update with CipherText\n");
       ABORT(-1);
     }
-    //printf("OUTL %d\n",*outl);
-    if (!EVP_CIPHER_CTX_ctrl(d->evp,EVP_CTRL_GCM_SET_TAG,16,tag)){
-      fprintf(stderr,"Unable to set tag\n");
-      ABORT(-1);
-    }
-    if (!(x=EVP_DecryptFinal(d->evp,NULL,&x))) {
+
+    if (d->cs->enc != 0x3e && !(x=EVP_DecryptFinal(d->evp,NULL,&x))) {
       fprintf(stderr,"BAD MAC\n");
       exit(1);
       ABORT(SSL_BAD_MAC);
     }
+
 
 	// Get additional data
 	// Get nonce
