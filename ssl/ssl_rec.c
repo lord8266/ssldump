@@ -96,6 +96,7 @@ char *ciphers[]={
      "aes-256-gcm",
      "ChaCha20-Poly1305",
      "aes-128-ccm",
+     "aes-128-ccm",
 };
 
 
@@ -206,6 +207,7 @@ int tls13_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
     int pad,i;
     int r,encpadl,x,_status=0;
     UCHAR aad[5],aead_nonce[12], *tag;
+	int taglen = d->cs->enc==ENC_AES128_CCM_8?8:16;
     CRDUMP("CipherText",in,inl);
     CRDUMPD("KEY",d->write_key);
     CRDUMPD("IV",d->implicit_iv);
@@ -220,16 +222,24 @@ int tls13_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
     }
     d->seq++;
     CRDUMP("NONCE",aead_nonce,12);
-    tag = in+(inl-16);
-    CRDUMP("Tag", tag, 16);
+    tag = in+(inl-taglen);
+    CRDUMP("Tag", tag, taglen);
+
+    aad[0] = ct;
+    aad[1] = 0x03;
+    aad[2] = 0x03;
+    aad[3] = MSB(inl);
+    aad[4] = LSB(inl);
+    CRDUMP("AAD",aad,5);
+    inl-=taglen;
 
 	if (!EVP_CIPHER_CTX_ctrl(d->evp, EVP_CTRL_AEAD_SET_IVLEN, 12, NULL)) {
 		fprintf(stderr, "Unable to set ivlen\n");
 		ABORT(-1);
 	}
 
-	if (!EVP_CIPHER_CTX_ctrl(d->evp, EVP_CTRL_AEAD_SET_TAG, 16, tag)) {
-		fprintf(stderr, "Unable to set tag\n");
+	if (IS_CCM_CIPHER(d->cs) && !EVP_CIPHER_CTX_ctrl(d->evp, EVP_CTRL_AEAD_SET_TAG, taglen, tag)) {
+		fprintf(stderr, "Unable to set tag for ccm cipher\n");
 		ABORT(-1);
 	}
 
@@ -238,43 +248,32 @@ int tls13_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
       ABORT(-1);
     }
 
-    aad[0] = ct;
-    aad[1] = 0x03;
-    aad[2] = 0x03;
-    aad[3] = MSB(inl);
-    aad[4] = LSB(inl);
-    CRDUMP("AAD",aad,5);
-    inl-=16;
-	if (d->cs->enc == 0x3e) {
-    	if (!EVP_DecryptUpdate(d->evp,NULL,outl,NULL,inl)){
+    if (IS_CCM_CIPHER(d->cs) && !EVP_DecryptUpdate(d->evp,NULL,outl,NULL,inl)){
     	  fprintf(stderr,"Unable to update data length\n");
     	  ABORT(-1);
-		}
 	}
+
     if (!EVP_DecryptUpdate(d->evp,NULL,outl,aad,5)){
       fprintf(stderr,"Unable to update aad\n");
       ABORT(-1);
     }
-    //printf("OUTL %d\n",*outl);
+
     CRDUMP("Real CipherText", in, inl);
     if (!EVP_DecryptUpdate(d->evp,out,outl,in,inl)){
       fprintf(stderr,"Unable to update with CipherText\n");
       ABORT(-1);
     }
 
-    if (d->cs->enc != 0x3e && !(x=EVP_DecryptFinal(d->evp,NULL,&x))) {
-      fprintf(stderr,"BAD MAC\n");
-      exit(1);
-      ABORT(SSL_BAD_MAC);
+    if (!IS_CCM_CIPHER(d->cs) && (!EVP_CIPHER_CTX_ctrl(d->evp,EVP_CTRL_GCM_SET_TAG,taglen,tag) || !EVP_DecryptFinal(d->evp,NULL,&x))) {
+      	fprintf(stderr,"BAD MAC\n");
+      	ABORT(SSL_BAD_MAC);
     }
 
-
-	// Get additional data
-	// Get nonce
 abort:
     ERR_print_errors_fp(stderr);	
     return _status;
 }
+
 int ssl_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
   ssl_obj *ssl;
   ssl_rec_decoder *d;

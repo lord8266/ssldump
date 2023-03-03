@@ -59,6 +59,7 @@ int tls13_decode_rec_data PROTO_LIST((ssl_obj *ssl,ssl_rec_decoder *d,int ct,int
 int ssl3_check_mac(ssl_rec_decoder *d, int ct, int ver, UCHAR *data,
   UINT4 datalen, UCHAR *mac);
 
-#define IS_AEAD_CIPHER(cs) (cs->enc==0x3b||cs->enc==0x3c||cs->enc==0x3d||cs->enc==0x3e)
+#define IS_AEAD_CIPHER(cs) (cs->enc==0x3b||cs->enc==0x3c||cs->enc==0x3d||cs->enc==0x3e||cs->enc==0x3f)
+#define IS_CCM_CIPHER(cs) (cs->enc==0x3e||cs->enc==0x3f)
 #endif
 
