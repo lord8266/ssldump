@@ -1195,6 +1195,8 @@ int ssl_tls13_update_keying_material(ssl,d,direction)
 	Data *secret;
 	ssl_rec_decoder *decoder;
 	UCHAR *newsecret;
+	UCHAR *newkey;
+	UCHAR *newiv;
 
 	if (direction == DIR_I2R) {
 		secret = d->CTS;
@@ -1205,9 +1207,10 @@ int ssl_tls13_update_keying_material(ssl,d,direction)
 	}
   	hkdf_expand_label(ssl, d, secret, "traffic upd", NULL, ssl->cs->dig_len, &newsecret);
 	secret->data = newsecret;
-  	hkdf_expand_label(ssl, d, secret, "key", NULL, ssl->cs->eff_bits/8, &decoder->write_key->data);
-  	hkdf_expand_label(ssl, d, secret, "iv", NULL, 12, &decoder->implicit_iv->data);
-	decoder->seq = 0;
+  	hkdf_expand_label(ssl, d, secret, "key", NULL, ssl->cs->eff_bits/8, &newkey);
+  	hkdf_expand_label(ssl, d, secret, "iv", NULL, 12, &newiv);
+	tls13_update_rec_key(decoder,newkey,newiv);
+
 	return 0;
 }
 

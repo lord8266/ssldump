@@ -88,6 +88,17 @@ char *ciphers[]={
      "aes-128-ccm",
 };
 
+struct ssl_rec_decoder_ {
+     SSL_CipherSuite *cs;
+     Data *mac_key;
+     Data *implicit_iv; /* for AEAD ciphers */
+     Data *write_key; /* for AEAD ciphers */
+#ifdef OPENSSL     
+     EVP_CIPHER_CTX *evp;
+#endif     
+     UINT8 seq;
+};
+
 
 static int tls_check_mac PROTO_LIST((ssl_rec_decoder *d,int ct,
   int ver,UCHAR *data,UINT4 datalen,UCHAR *iv,UINT4 ivlen,UCHAR *mac));
@@ -183,6 +194,16 @@ int ssl_destroy_rec_decoder(dp)
 
 #define MSB(a) ((a>>8)&0xff)
 #define LSB(a) (a&0xff)
+
+int tls13_update_rec_key(d,newkey,newiv)
+	ssl_rec_decoder *d;
+	UCHAR *newkey;
+	UCHAR *newiv;
+{
+	d->write_key->data = newkey;
+	d->implicit_iv->data = newiv;
+	d->seq = 0;
+}
 
 int tls13_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
   ssl_obj *ssl;
