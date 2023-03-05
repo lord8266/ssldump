@@ -47,11 +47,23 @@
 #ifndef _ssl_rec_h
 #define _ssl_rec_h
 
+
+struct ssl_rec_decoder_ {
+     SSL_CipherSuite *cs;
+     Data *mac_key;
+     Data *implicit_iv; /* for AEAD ciphers */
+     Data *write_key; /* for AEAD ciphers */
+#ifdef OPENSSL     
+     EVP_CIPHER_CTX *evp;
+#endif     
+     UINT8 seq;
+};
+
 typedef struct ssl_rec_decoder_ ssl_rec_decoder;
 
 int ssl_destroy_rec_decoder PROTO_LIST((ssl_rec_decoder **dp));
 int ssl_create_rec_decoder PROTO_LIST((ssl_rec_decoder **dp,
-  SSL_CipherSuite *cs,UCHAR *mk,UCHAR *sk,UCHAR *iv));
+  ssl_obj *ssl,UCHAR *mk,UCHAR *sk,UCHAR *iv));
 int ssl_decode_rec_data PROTO_LIST((ssl_obj *ssl,ssl_rec_decoder *d,
   int ct,int version,UCHAR *in,int inl,UCHAR *out,int *outl));
 int tls13_decode_rec_data PROTO_LIST((ssl_obj *ssl,ssl_rec_decoder *d,int ct,int version,UCHAR *in,int inl,UCHAR *out,int *outl));

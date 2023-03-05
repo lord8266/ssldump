@@ -817,6 +817,20 @@ static int decode_HandshakeType_Finished(ssl,dir,seg,data)
    return (0);
 
   }
+
+static int decode_HandshakeType_KeyUpdate(ssl,dir,seg,data)
+	ssl_obj *ssl;
+	int dir;
+	segment *seg;
+	Data *data;
+{
+	ssl_tls13_update_keying_material(ssl, ssl->decoder, dir);
+	return 0;
+}
+
+
+
+		
 decoder HandshakeType_decoder[]={
 	{
 		0,
@@ -877,6 +891,11 @@ decoder HandshakeType_decoder[]={
 		20,
 		"Finished",
 		decode_HandshakeType_Finished
+	},
+	{
+		24,
+		"KeyUpdate",
+		decode_HandshakeType_KeyUpdate
 	},
 {-1}
 };

@@ -105,6 +105,8 @@ struct ssl_decoder_ {
      ssl_rec_decoder *s_to_c;     
      ssl_rec_decoder *c_to_s_n;
      ssl_rec_decoder *s_to_c_n;
+	 int n_secret_c_to_s;
+	 int n_secret_s_to_c;
 };
 
 
@@ -1098,10 +1100,10 @@ static int ssl_generate_keying_material(ssl,d)
     }
 
     if((r=ssl_create_rec_decoder(&d->c_to_s_n,
-      ssl->cs,c_mk,c_wk,c_iv)))
+      ssl,c_mk,c_wk,c_iv)))
       ABORT(r);
     if((r=ssl_create_rec_decoder(&d->s_to_c_n,
-      ssl->cs,s_mk,s_wk,s_iv)))
+      ssl,s_mk,s_wk,s_iv)))
       ABORT(r);
 
     
@@ -1184,6 +1186,31 @@ abort:
     return r;
   }
 
+// Will update the keys for the particular direction
+int ssl_tls13_update_keying_material(ssl,d,direction)
+	ssl_obj *ssl;
+	ssl_decoder *d;
+	int direction;
+{
+	Data *secret;
+	ssl_rec_decoder *decoder;
+	UCHAR *newsecret;
+
+	if (direction == DIR_I2R) {
+		secret = d->CTS;
+		decoder = d->c_to_s;
+	} else {
+		secret = d->STS;
+		decoder = d->s_to_c;
+	}
+  	hkdf_expand_label(ssl, d, secret, "traffic upd", NULL, ssl->cs->dig_len, &newsecret);
+	secret->data = newsecret;
+  	hkdf_expand_label(ssl, d, secret, "key", NULL, ssl->cs->eff_bits/8, &decoder->write_key->data);
+  	hkdf_expand_label(ssl, d, secret, "iv", NULL, 12, &decoder->implicit_iv->data);
+	decoder->seq = 0;
+	return 0;
+}
+
 int ssl_tls13_generate_keying_material(ssl,d)
   ssl_obj* ssl;
   ssl_decoder *d;
@@ -1231,26 +1258,26 @@ int ssl_tls13_generate_keying_material(ssl,d)
 	  fprintf(stderr, "c_iv hkdf_expand_label failed\n");
 	  goto abort;
   }
-  CRDUMP("Server Handshake Write key", s_wk_h,32 );
+  CRDUMP("Server Handshake Write key", s_wk_h,ssl->cs->eff_bits/8 );
   CRDUMP("Server Handshake IV", s_iv_h, 12);
-  CRDUMP("Client Handshake Write key", c_wk_h,32);
+  CRDUMP("Client Handshake Write key", c_wk_h, ssl->cs->eff_bits/8);
   CRDUMP("Client Handshake IV", c_iv_h,12);
-  CRDUMP("Server Write key", s_wk,32);
+  CRDUMP("Server Write key", s_wk,ssl->cs->eff_bits/8);
   CRDUMP("Server IV", s_iv,12);
-  CRDUMP("Client Write key",c_wk, 32);
+  CRDUMP("Client Write key",c_wk, ssl->cs->eff_bits/8);
   CRDUMP("Client IV", c_iv,12);
    
   if((r=ssl_create_rec_decoder(&d->c_to_s_n,
-    ssl->cs,NULL,c_wk,c_iv)))
+    ssl,NULL,c_wk,c_iv)))
     ABORT(r);
   if((r=ssl_create_rec_decoder(&d->s_to_c_n,
-    ssl->cs,NULL,s_wk,s_iv)))
+    ssl,NULL,s_wk,s_iv)))
     ABORT(r);
   if((r=ssl_create_rec_decoder(&d->c_to_s,
-    ssl->cs,NULL,c_wk_h,c_iv_h)))
+    ssl,NULL,c_wk_h,c_iv_h)))
     ABORT(r);
   if((r=ssl_create_rec_decoder(&d->s_to_c,
-    ssl->cs,NULL,s_wk_h,s_iv_h)))
+    ssl,NULL,s_wk_h,s_iv_h)))
     ABORT(r);
   return 0;
 abort:

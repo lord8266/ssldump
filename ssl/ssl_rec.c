@@ -58,17 +58,6 @@
 #include "ssldecode.h"
 #include "ssl_rec.h"
 
-struct ssl_rec_decoder_ {
-     SSL_CipherSuite *cs;
-     Data *mac_key;
-     Data *implicit_iv; /* for AEAD ciphers */
-     Data *write_key; /* for AEAD ciphers */
-#ifdef OPENSSL     
-     EVP_CIPHER_CTX *evp;
-#endif     
-     UINT8 seq;
-};
-
 
 char *digests[]={
      "MD5",
@@ -104,9 +93,9 @@ static int tls_check_mac PROTO_LIST((ssl_rec_decoder *d,int ct,
   int ver,UCHAR *data,UINT4 datalen,UCHAR *iv,UINT4 ivlen,UCHAR *mac));
 static int fmt_seq PROTO_LIST((UINT4 num,UCHAR *buf));
 
-int ssl_create_rec_decoder(dp,cs,mk,sk,iv)
+int ssl_create_rec_decoder(dp,ssl,mk,sk,iv)
   ssl_rec_decoder **dp;
-  SSL_CipherSuite *cs;
+  ssl_obj *ssl;
   UCHAR *mk;
   UCHAR *sk;
   UCHAR *iv;
@@ -115,10 +104,11 @@ int ssl_create_rec_decoder(dp,cs,mk,sk,iv)
     ssl_rec_decoder *dec=0;
 #ifdef OPENSSL
     const EVP_CIPHER *ciph=0;
+	int iv_len = ssl->version == TLSV13_VERSION?12:ssl->cs->block;
 
     /* Find the SSLeay cipher */
-    if(cs->enc!=ENC_NULL){
-      ciph=(EVP_CIPHER *)EVP_get_cipherbyname(ciphers[cs->enc-0x30]);
+    if(ssl->cs->enc!=ENC_NULL){
+      ciph=(EVP_CIPHER *)EVP_get_cipherbyname(ciphers[ssl->cs->enc-0x30]);
       if(!ciph)
         ABORT(R_INTERNAL);
     }
@@ -129,28 +119,28 @@ int ssl_create_rec_decoder(dp,cs,mk,sk,iv)
     if(!(dec=(ssl_rec_decoder *)calloc(1,sizeof(ssl_rec_decoder))))
       ABORT(R_NO_MEMORY);
 
-    dec->cs=cs;
+    dec->cs=ssl->cs;
 
-    if((r=r_data_alloc(&dec->mac_key,cs->dig_len)))
+    if((r=r_data_alloc(&dec->mac_key,ssl->cs->dig_len)))
       ABORT(r);
 
-    if((r=r_data_alloc(&dec->implicit_iv,cs->block)))
+    if((r=r_data_alloc(&dec->implicit_iv,iv_len)))
       ABORT(r);
-    memcpy(dec->implicit_iv->data,iv,cs->block);
+    memcpy(dec->implicit_iv->data,iv, iv_len);
 
-    if((r=r_data_create(&dec->write_key,sk,cs->eff_bits/8)))
+    if((r=r_data_create(&dec->write_key,sk,ssl->cs->eff_bits/8)))
       ABORT(r);
 
     /*
        This is necessary for AEAD ciphers, because we must wait to fully initialize the cipher
        in order to include the implicit IV
     */
-    if(IS_AEAD_CIPHER(cs)){
+    if(IS_AEAD_CIPHER(ssl->cs)){
       sk=NULL;
       iv=NULL;
     }
     else
-      memcpy(dec->mac_key->data,mk,cs->dig_len);
+      memcpy(dec->mac_key->data,mk,ssl->cs->dig_len);
 
     if(!(dec->evp=EVP_CIPHER_CTX_new()))
       ABORT(R_NO_MEMORY);
