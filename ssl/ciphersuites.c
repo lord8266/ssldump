@@ -229,24 +229,6 @@ static SSL_CipherSuite CipherSuites[]={
      {4867,KEX_DH,SIG_NONE,ENC_CHACHA20_POLY1305,64,256,256,DIG_SHA256,32,0},
      {4868,KEX_DH,SIG_NONE,ENC_AES128_CCM,16,128,128,DIG_SHA256,32,0},
      {4869,KEX_DH,SIG_NONE,ENC_AES128_CCM_8,16,128,128,DIG_SHA256,32,0}, // CCM_8
-//	{
-//		4866,
-//		"TLS_AES_256_GCM_SHA384",
-//		0	},
-//	{
-//		4867,
-//		"TLS_CHACHA20_POLY1305_SHA256",
-//		0	},
-//	{
-//		4868,
-//		"TLS_AES_128_CCM_SHA256",
-//		0	},
-//	{
-//		4869,
-//		"TLS_AES_128_CCM_8_SHA256",
-//		0	},
-//	{
-     // Missing: 49294-49307
      {-1}
 };
 

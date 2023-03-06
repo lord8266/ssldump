@@ -59,6 +59,17 @@
 #include "ssl_rec.h"
 
 
+struct ssl_rec_decoder_ {
+     SSL_CipherSuite *cs;
+     Data *mac_key;
+     Data *implicit_iv; /* for AEAD ciphers */
+     Data *write_key; /* for AEAD ciphers */
+#ifdef OPENSSL     
+     EVP_CIPHER_CTX *evp;
+#endif     
+     UINT8 seq;
+};
+
 char *digests[]={
      "MD5",
      "SHA1",
@@ -85,18 +96,7 @@ char *ciphers[]={
      "aes-256-gcm",
      "ChaCha20-Poly1305",
      "aes-128-ccm",
-     "aes-128-ccm",
-};
-
-struct ssl_rec_decoder_ {
-     SSL_CipherSuite *cs;
-     Data *mac_key;
-     Data *implicit_iv; /* for AEAD ciphers */
-     Data *write_key; /* for AEAD ciphers */
-#ifdef OPENSSL     
-     EVP_CIPHER_CTX *evp;
-#endif     
-     UINT8 seq;
+     "aes-128-ccm", // ccm 8 but uses the same cipher
 };
 
 

@@ -48,8 +48,6 @@
 #include "sslprint.h"
 #include "ssl.enums.h"
 #ifdef OPENSSL
-//#include <openssl/types.h>
-//#include <openssl/core_names.h>
 #include <openssl/err.h>
 #include <openssl/kdf.h>
 #include <openssl/ssl.h>
@@ -105,8 +103,6 @@ struct ssl_decoder_ {
      ssl_rec_decoder *s_to_c;     
      ssl_rec_decoder *c_to_s_n;
      ssl_rec_decoder *s_to_c_n;
-	 int n_secret_c_to_s;
-	 int n_secret_s_to_c;
 };
 
 

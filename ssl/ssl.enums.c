@@ -455,10 +455,11 @@ static int decode_HandshakeType_ServerHello(ssl,dir,seg,data)
       if(ja3s_ex_str && ja3s_ex_str[strlen(ja3s_ex_str) - 1] == '-')
           ja3s_ex_str[strlen(ja3s_ex_str) - 1] = '\0';
     }
+
     if (ssl->version==TLSV13_VERSION){
       ssl_tls13_generate_keying_material(ssl,ssl->decoder);
     }
-    //Here it is known whether tlsv12 or tlsv13
+
     ssl_process_server_session_id(ssl,ssl->decoder,session_id.data,
       session_id.len);
 
