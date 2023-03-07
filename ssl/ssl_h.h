@@ -70,6 +70,8 @@ typedef struct d_queue_ {
 typedef struct ssl_extensions_ {
   int encrypt_then_mac;
   int extended_master_secret;
+  int client_certificate_type;
+  int server_certificate_type;
 } ssl_extensions;
 
 typedef struct ssl_obj_ {
