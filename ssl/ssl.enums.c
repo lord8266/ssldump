@@ -456,7 +456,8 @@ static int decode_HandshakeType_ServerHello(ssl,dir,seg,data)
           ja3s_ex_str[strlen(ja3s_ex_str) - 1] = '\0';
     }
 
-    if (ssl->version==TLSV13_VERSION){
+    if (ssl->version==TLSV13_VERSION){ 
+	  // tls version is known in server hello for tls1.3 hence generate keying material here
       ssl_tls13_generate_keying_material(ssl,ssl->decoder);
     }
 
@@ -528,6 +529,8 @@ static int decode_HandshakeType_SessionTicket(ssl,dir,seg,data)
 {
     int r;
     UINT4 exlen, ex, val;
+    extern decoder extension_decoder[];
+										
     LF;
     SSL_DECODE_UINT32(ssl, "ticket_lifetime",0, data, &val);
     explain(ssl, "ticket_lifetime %u\n", val);
@@ -549,7 +552,6 @@ static int decode_HandshakeType_SessionTicket(ssl,dir,seg,data)
     data->data+=val;data->len-=val;
     SSL_DECODE_UINT16(ssl, "exlen", 0, data, &exlen);
     LF;
-    extern decoder extension_decoder[]; // TODO: On top
     if (exlen) {
       while (data->len) {
         SSL_DECODE_UINT16(ssl, "extension type", 0, data, &ex);
@@ -570,9 +572,10 @@ static int decode_HandshakeType_EncryptedExtensions(ssl,dir,seg,data)
   {
     int r;
     UINT4 exlen, ex;
+    extern decoder extension_decoder[];
+										
     SSL_DECODE_UINT16(ssl, 0, 0, data, &exlen);
     LF;
-    extern decoder extension_decoder[]; // TODO: On top
     if (exlen) {
       while (data->len) {
         SSL_DECODE_UINT16(ssl, "extension type", 0, data, &ex);
@@ -603,7 +606,7 @@ static int decode_HandshakeType_Certificate(ssl,dir,seg,data)
     LF;
     ssl_update_handshake_messages(ssl,data);
     if (ssl->version==TLSV13_VERSION){
-      SSL_DECODE_UINT8(ssl,"certificate request context len",0,data,&len);
+      SSL_DECODE_OPAQUE_ARRAY(ssl,"certificate request context",-((1<<7)-1),0, data, NULL);
     }
     SSL_DECODE_UINT24(ssl,"certificates len",0,data,&len);
 
@@ -713,7 +716,6 @@ static int decode_HandshakeType_CertificateRequest(ssl,dir,seg,data)
     return(0);
 
   }
-
 static int decode_HandshakeType_ServerHelloDone(ssl,dir,seg,data)
   ssl_obj *ssl;
   int dir;
@@ -739,6 +741,7 @@ static int decode_HandshakeType_CertificateVerify(ssl,dir,seg,data)
 
 
   int r;
+  UINT4 signature_type;
 
     struct json_object *jobj;
     jobj = ssl->cur_json_st;
@@ -746,6 +749,9 @@ static int decode_HandshakeType_CertificateVerify(ssl,dir,seg,data)
 
   LF;
   ssl_update_handshake_messages(ssl,data);
+  if (ssl->version == TLSV13_VERSION) {
+    SSL_DECODE_UINT16(ssl,"signature_type",P_HL,data,&signature_type);
+  }
   SSL_DECODE_OPAQUE_ARRAY(ssl,"Signature",-((1<<15)-1),P_HL,data,0);
   return(0);
 
@@ -836,9 +842,6 @@ static int decode_HandshakeType_KeyUpdate(ssl,dir,seg,data)
 	return 0;
 }
 
-
-
-		
 decoder HandshakeType_decoder[]={
 	{
 		0,
@@ -2974,14 +2977,14 @@ static int decode_extension_supported_groups(ssl,dir,seg,data)
       SSL_DECODE_UINT16(ssl,"supported_groups list length",0,data,&l);
       LF;
       while(l) {
-       p=data->len;
-       SSL_DECODE_UINT16(ssl, "supported group", 0, data, &g);
+	p=data->len;
+	SSL_DECODE_UINT16(ssl, "supported group", 0, data, &g);
         if(!ja3_ec_str)
             ja3_ec_str = calloc(7, 1);
         else
             ja3_ec_str = realloc(ja3_ec_str, strlen(ja3_ec_str) + 7);
-       snprintf(ja3_ec_str + strlen(ja3_ec_str), 7, "%u-", g);
-       l-=(p-data->len);
+	snprintf(ja3_ec_str + strlen(ja3_ec_str), 7, "%u-", g);
+	l-=(p-data->len);
       }
       if(ja3_ec_str && ja3_ec_str[strlen(ja3_ec_str) - 1] == '-')
           ja3_ec_str[strlen(ja3_ec_str) - 1] = '\0';
@@ -3012,7 +3015,6 @@ static int decode_extension_ec_point_formats(ssl,dir,seg,data)
       while(l) {
 	p=data->len;
 	SSL_DECODE_UINT8(ssl, "ec point format", 0, data, &f);
-       LF;
         if(!ja3_ecp_str)
             ja3_ecp_str = calloc(5, 1);
         else
@@ -3409,7 +3411,7 @@ decoder extension_decoder[] = {
 	{-1}
 };
 
-	static int decode_server_name_type_host_name(ssl,dir,seg,data)
+static int decode_server_name_type_host_name(ssl,dir,seg,data)
   ssl_obj *ssl;
   int dir;
   segment *seg;

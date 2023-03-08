@@ -130,7 +130,7 @@ AC_ARG_ENABLE([debug],
 	[debug=${enableval}], [debug=no])
 
 if test "x${debug}" = xyes; then
-	CFLAGS="$CFLAGS -g -DDEBUG"
+	CFLAGS="$CFLAGS -g"
 fi
 
 AC_ARG_ENABLE([asan],

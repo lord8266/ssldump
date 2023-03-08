@@ -1223,7 +1223,6 @@ int ssl_tls13_generate_keying_material(ssl,d)
      printf("Unable to read TLSv13 keys\n");
      ABORT(-1);
    }
-  printf("Read all TLSv13 keys\n");
   // It is 12 for all ciphers
   if (hkdf_expand_label(ssl, d, d->SHTS, "key", NULL, ssl->cs->eff_bits/8, &s_wk_h)) {
 		fprintf(stderr, "s_wk_h hkdf_expand_label failed\n");
@@ -1362,10 +1361,8 @@ static int ssl_read_key_log_file(ssl,d)
       if (!(label=strtok(line, " "))) continue;
       if (!(client_random=strtok(NULL, " ")) || strlen(client_random)!=64 || STRNICMP(client_random, d_client_random, 64)) continue;
       secret=strtok(NULL, " ");
-	  printf("secret:%s len:%ld version:%d=%d\n",secret, strlen(secret), ssl->version, TLSV13_VERSION);
       if (!(secret) || strlen(secret)!=(ssl->version==TLSV13_VERSION?ssl->cs->dig_len*2:96)) continue;
       if (!strncmp(label, "CLIENT_RANDOM", 13)) {
-        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
         if ((r=r_data_alloc(&d->MS, 48)))
           ABORT(r);
         if (read_hex_string(secret, d->MS->data, 48))
@@ -1373,25 +1370,21 @@ static int ssl_read_key_log_file(ssl,d)
       }
       if (ssl->version!=TLSV13_VERSION) continue;
       if (!strncmp(label, "SERVER_HANDSHAKE_TRAFFIC_SECRET", 31)){
-        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
         if ((r=r_data_alloc(&d->SHTS, ssl->cs->dig_len)))
           ABORT(r);
         if (read_hex_string(secret, d->SHTS->data, ssl->cs->dig_len))
           ABORT(r);
       } else if (!strncmp(label, "CLIENT_HANDSHAKE_TRAFFIC_SECRET", 31)){
-        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
         if ((r=r_data_alloc(&d->CHTS, ssl->cs->dig_len)))
           ABORT(r);
         if (read_hex_string(secret, d->CHTS->data, ssl->cs->dig_len))
           ABORT(r);
       } else if (!strncmp(label, "SERVER_TRAFFIC_SECRET_0", 23)){
-        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
         if ((r=r_data_alloc(&d->STS, ssl->cs->dig_len)))
           ABORT(r);
         if (read_hex_string(secret, d->STS->data, ssl->cs->dig_len))
           ABORT(r);
       } else if (!strncmp(label, "CLIENT_TRAFFIC_SECRET_0", 23)){
-        printf("Read LINE %s %ld %ld\n",label,strlen(client_random),strlen(secret));
         if ((r=r_data_alloc(&d->CTS, ssl->cs->dig_len)))
           ABORT(r);
         if (read_hex_string(secret, d->CTS->data, ssl->cs->dig_len))
