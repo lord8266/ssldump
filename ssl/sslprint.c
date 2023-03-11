@@ -277,11 +277,7 @@ int ssl_expand_record(ssl,q,direction,data,len)
        json_object_object_add(jobj, "record_ver", json_object_new_string(verstr));
     }
 
-    if (ssl->version != TLSV13_VERSION || ct == 23) { // TLS 1.3 check what happens
-        r = ssl_decode_record(ssl, ssl->decoder, direction, ct, version, &d);
-    } else {
-        r = 0;
-    }
+    r = ssl_decode_record(ssl, ssl->decoder, direction, ct, version, &d);
     if(r==SSL_BAD_MAC){
       explain(ssl,"  bad MAC\n");
       return(0);
@@ -310,7 +306,7 @@ int ssl_expand_record(ssl,q,direction,data,len)
           logger->vtbl->data(ssl->logger_obj,d.data,d.len,direction);
         }
         if (ssl->version==TLSV13_VERSION){
-          ct = d.data[--d.len];
+          ct = d.data[--d.len]; // In TLS 1.3 ct is stored in the end for encrypted records
         }
       } 
       if((r=ssl_decode_switch(ssl,ContentType_decoder,ct,direction,q, &d))) {
@@ -348,10 +344,10 @@ int ssl_decode_uintX(ssl,name,size,p,data,x)
       data->len--;
     }
 
-    *x=v;
     P_(p){
       explain(ssl,"%s = %d\n",name,*x);
     }
+    *x=v;
     return(0);
   }
 
@@ -448,7 +444,8 @@ int ssl_print_enum(ssl,name,dtable,value)
   UINT4 value;
   {
 
-    if(name) explain(ssl,"%s ",name);
+    if(name) explain(ssl,"%s ",name);    
+    INDENT;
     
     while(dtable && dtable->type!=-1){
       if(dtable->type == value){
@@ -799,9 +796,3 @@ int ssl_print_cipher_suite(ssl,version,p,val)
     }
     return(0);
   }
-
-
-
-      
-  
-  

@@ -96,7 +96,7 @@ char *ciphers[]={
      "aes-256-gcm",
      "ChaCha20-Poly1305",
      "aes-128-ccm",
-     "aes-128-ccm", // ccm 8 but uses the same cipher
+     "aes-128-ccm", // for ccm 8, uses the same cipher
 };
 
 
@@ -227,7 +227,6 @@ int tls13_decode_rec_data(ssl,d,ct,version,in,inl,out,outl)
       ABORT(-1);
     }
     memcpy(aead_nonce, d->implicit_iv->data, 12);
-    printf("SEQ %ld\n", d->seq);
     for (i = 0; i < 8; i++) { // AEAD NONCE according to RFC TLS1.3
         aead_nonce[12 - 1 - i] ^= ((d->seq >> (i * 8)) & 0xFF);
     }

@@ -447,8 +447,11 @@ int ssl_decode_record(ssl,dec,direction,ct,version,d)
     else
       rd=0;
     state=(direction==DIR_I2R)?ssl->i_state:ssl->r_state;
-
-    if(!rd){
+	
+	if (ssl->version == TLSV13_VERSION && ct != 23) { // Only type 23 is encrypted in tls1.3
+		ssl->record_encryption = REC_PLAINTEXT;
+		return 0;
+	} else if(!rd){
       if(state & SSL_ST_SENT_CHANGE_CIPHER_SPEC){
         ssl->record_encryption=REC_CIPHERTEXT;
         return(SSL_NO_DECRYPT);
@@ -1220,7 +1223,6 @@ int ssl_tls13_generate_keying_material(ssl,d)
         *s_wk,*s_iv,*c_wk,*c_iv;
    if (!(d->ctx->ssl_key_log_file && ssl_read_key_log_file(ssl, d)==0 && 
      d->SHTS && d->CHTS && d->STS && d->CTS)){
-     printf("Unable to read TLSv13 keys\n");
      ABORT(-1);
    }
   // It is 12 for all ciphers
@@ -1279,7 +1281,6 @@ int ssl_tls13_generate_keying_material(ssl,d)
     ABORT(r);
   return 0;
 abort:
-  fprintf(stderr, "aborted\n");
   return r;
 }
 

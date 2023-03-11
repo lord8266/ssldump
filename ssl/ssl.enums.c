@@ -123,6 +123,7 @@ static int decode_ContentType_Handshake(ssl,dir,seg,data)
      return(0);
 
   }
+
 static int decode_ContentType_application_data(ssl,dir,seg,data)
   ssl_obj *ssl;
   int dir;
@@ -139,10 +140,11 @@ static int decode_ContentType_application_data(ssl,dir,seg,data)
 
     SSL_DECODE_OPAQUE_ARRAY(ssl,"data",data->len,0,data,&d);
 
-    P_(P_AD){
+    if(NET_print_flags & NET_PRINT_JSON) { 
+    	json_object_object_add(jobj, "msg_data", json_object_new_string_len(d.data, d.len));
+	} else P_(P_AD) {
 	    print_data(ssl,&d);
-    }
-    else {
+    } else {
 	LF;
     }
     return(0);
@@ -2961,6 +2963,18 @@ static int decode_extension(ssl,dir,seg,data)
     return(0);
   }
 
+decoder supported_groups_decoder[] = {
+	{0x0017,"secp256r1",0},
+	{0x0018,"secp384r1",0},
+	{0x0019,"secp521r1",0},
+	{0x001d,"x25519",0},
+	{0x001e,"x448",0},
+	{0x0100,"ffdhe2048",0},
+	{0x0101,"ffdhe3072",0},
+	{0x0102,"ffdhe4096",0},
+	{0x0103,"ffdhe6144",0},
+	{0x0104,"ffdhe8192",0},
+};
 // Extension #10 supported_groups (renamed from "elliptic_curves")
 static int decode_extension_supported_groups(ssl,dir,seg,data)
   ssl_obj *ssl;
@@ -2978,7 +2992,8 @@ static int decode_extension_supported_groups(ssl,dir,seg,data)
       LF;
       while(l) {
 	p=data->len;
-	SSL_DECODE_UINT16(ssl, "supported group", 0, data, &g);
+    SSL_DECODE_ENUM(ssl,"supported group",2,supported_groups_decoder,SSL_PRINT_ALL,data,&g);
+	LF;
         if(!ja3_ec_str)
             ja3_ec_str = calloc(7, 1);
         else
@@ -2997,6 +3012,11 @@ static int decode_extension_supported_groups(ssl,dir,seg,data)
     return(0);
   }
 
+decoder ec_point_formats_decoder[] = {
+	{0,"uncompressed",0,},
+	{1,"ansiX962_compressed_prime",0,},
+	{2,"ansiX962_compressed_char2",0,}
+};
 // Extension #11 ec_point_formats
 static int decode_extension_ec_point_formats(ssl,dir,seg,data)
   ssl_obj *ssl;
@@ -3014,7 +3034,8 @@ static int decode_extension_ec_point_formats(ssl,dir,seg,data)
       LF;
       while(l) {
 	p=data->len;
-	SSL_DECODE_UINT8(ssl, "ec point format", 0, data, &f);
+    SSL_DECODE_ENUM(ssl,"ec point format",1,ec_point_formats_decoder,SSL_PRINT_ALL,data, &f);
+	LF;
         if(!ja3_ecp_str)
             ja3_ecp_str = calloc(5, 1);
         else
