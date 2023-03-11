@@ -376,7 +376,7 @@ int ssl_process_client_session_id(ssl,d,msg,len)
       //todo: better save and destroy only when successfully read key log
       r_data_destroy(&d->MS);
 
-      if(d->ctx->ssl_key_log_file && (ssl_read_key_log_file(ssl, d)==0) && d->MS)// TODO: Will not save TLSv13
+      if(d->ctx->ssl_key_log_file && (ssl_read_key_log_file(ssl, d)==0) && d->MS) // todo: TLS 1.3 session
       {
         //we found master secret for session in keylog
         //try to save session
@@ -397,9 +397,10 @@ int ssl_process_client_session_id(ssl,d,msg,len)
     return(0);
 #endif      
   }
+
 int ssl_process_handshake_finished(ssl_obj* ssl,ssl_decoder *dec, Data *data){
    if (ssl->version==TLSV13_VERSION){
-    if (ssl->direction==DIR_I2R){
+    if (ssl->direction==DIR_I2R){ // Change from handshake decoder to data traffic decoder
       dec->c_to_s = dec->c_to_s_n;
       dec->s_to_c = dec->s_to_c_n;
       dec->s_to_c_n = 0;
