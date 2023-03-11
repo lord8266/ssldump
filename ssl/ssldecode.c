@@ -202,6 +202,7 @@ int ssl_decode_ctx_destroy(dp)
   {
 #ifdef OPENSSL
     ssl_decode_ctx *d = *dp;
+	if (!d) return 0;
     if(d->ssl_key_log_file) {
       fclose(d->ssl_key_log_file);
     }
