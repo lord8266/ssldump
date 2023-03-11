@@ -8,6 +8,7 @@
 #include <openssl/ssl.h>
 #endif
 #include "ssl.enums.h"
+
 static int decode_extension(ssl_obj *ssl, int dir, segment *seg, Data *data);
 static int decode_server_name(ssl_obj *ssl, int dir, segment *seg, Data *data);
 static int decode_ContentType_ChangeCipherSpec(ssl,dir,seg,data)
@@ -122,6 +123,7 @@ static int decode_ContentType_Handshake(ssl,dir,seg,data)
      return(0);
 
   }
+
 static int decode_ContentType_application_data(ssl,dir,seg,data)
   ssl_obj *ssl;
   int dir;
@@ -138,10 +140,11 @@ static int decode_ContentType_application_data(ssl,dir,seg,data)
 
     SSL_DECODE_OPAQUE_ARRAY(ssl,"data",data->len,0,data,&d);
 
-    P_(P_AD){
+    if(NET_print_flags & NET_PRINT_JSON) { 
+    	json_object_object_add(jobj, "msg_data", json_object_new_string_len(d.data, d.len));
+	} else P_(P_AD) {
 	    print_data(ssl,&d);
-    }
-    else {
+    } else {
 	LF;
     }
     return(0);
@@ -425,8 +428,6 @@ static int decode_HandshakeType_ServerHello(ssl,dir,seg,data)
     ja3s_c_str = calloc(6, 1);
     snprintf(ja3s_c_str, 6, "%u", ssl->cipher_suite);
 
-    ssl_process_server_session_id(ssl,ssl->decoder,session_id.data,
-      session_id.len);
 
     P_(P_HL) LF;
     SSL_DECODE_ENUM(ssl,"compressionMethod",1,compression_method_decoder,P_HL,data,0);
@@ -456,6 +457,14 @@ static int decode_HandshakeType_ServerHello(ssl,dir,seg,data)
       if(ja3s_ex_str && ja3s_ex_str[strlen(ja3s_ex_str) - 1] == '-')
           ja3s_ex_str[strlen(ja3s_ex_str) - 1] = '\0';
     }
+
+    if (ssl->version==TLSV13_VERSION){ 
+	  // tls version is known in server hello for tls1.3 hence generate keying material here
+      ssl_tls13_generate_keying_material(ssl,ssl->decoder);
+    }
+
+    ssl_process_server_session_id(ssl,ssl->decoder,session_id.data,
+      session_id.len);
 
     if(!ja3s_ver_str) {
 	ja3s_ver_str = calloc(1, 1);
@@ -513,24 +522,94 @@ static int decode_HandshakeType_ServerHello(ssl,dir,seg,data)
     return(0);
 
   }
+
+static int decode_HandshakeType_SessionTicket(ssl,dir,seg,data)
+    ssl_obj *ssl;
+    int dir;
+    segment *seg;
+    Data *data;
+{
+    int r;
+    UINT4 exlen, ex, val;
+    extern decoder extension_decoder[];
+										
+    LF;
+    SSL_DECODE_UINT32(ssl, "ticket_lifetime",0, data, &val);
+    explain(ssl, "ticket_lifetime %u\n", val);
+    SSL_DECODE_UINT32(ssl, "ticket_age_add", 0,data, &val);
+    explain(ssl, "ticket_age_add %u\n", val);
+    SSL_DECODE_UINT8(ssl, "ticket_nonce",0,data, &val);
+    if (val>data->len) {
+      fprintf(stderr, "Short read: %d bytes available (expecting %d)\n", data->len, val);
+      ERETURN(R_EOD);
+    }
+    CRDUMP("ticket_nonce", data->data, val);
+    data->data+=val;data->len-=val;
+    SSL_DECODE_UINT16(ssl, "ticket",0,data, &val);
+    if (val>data->len) {
+      fprintf(stderr, "Short read: %d bytes available (expecting %d)\n", data->len, val);
+      ERETURN(R_EOD);
+    }
+    CRDUMP("ticket", data->data, val);
+    data->data+=val;data->len-=val;
+    SSL_DECODE_UINT16(ssl, "exlen", 0, data, &exlen);
+    LF;
+    if (exlen) {
+      while (data->len) {
+        SSL_DECODE_UINT16(ssl, "extension type", 0, data, &ex);
+        if (ssl_decode_switch(ssl, extension_decoder, ex, dir, seg, data) == R_NOT_FOUND) {
+          decode_extension(ssl, dir, seg, data);
+          P_(P_RH) { explain(ssl, "Extension type: %u not yet implemented in ssldump\n", ex); }
+          continue;
+        }
+        LF;
+      }
+    }
+}
+static int decode_HandshakeType_EncryptedExtensions(ssl,dir,seg,data)
+  ssl_obj *ssl;
+  int dir;
+  segment *seg;
+  Data *data;
+  {
+    int r;
+    UINT4 exlen, ex;
+    extern decoder extension_decoder[];
+										
+    SSL_DECODE_UINT16(ssl, 0, 0, data, &exlen);
+    LF;
+    if (exlen) {
+      while (data->len) {
+        SSL_DECODE_UINT16(ssl, "extension type", 0, data, &ex);
+        if (ssl_decode_switch(ssl, extension_decoder, ex, dir, seg, data) == R_NOT_FOUND) {
+          decode_extension(ssl, dir, seg, data);
+          P_(P_RH) { explain(ssl, "Extension type: %u not yet implemented in ssldump\n", ex); }
+          continue;
+        }
+        LF;
+      }
+    }
+  }
 static int decode_HandshakeType_Certificate(ssl,dir,seg,data)
   ssl_obj *ssl;
   int dir;
   segment *seg;
   Data *data;
   {
-
-
-    UINT4 len;
+    UINT4 len,exlen,ex;
     Data cert;
     int r;
 
     struct json_object *jobj;
     jobj = ssl->cur_json_st;
     json_object_object_add(jobj, "handshake_type", json_object_new_string("Certificate"));
+    extern decoder extension_decoder[];
 
     LF;
     ssl_update_handshake_messages(ssl,data);
+    if (ssl->version==TLSV13_VERSION){
+      SSL_DECODE_OPAQUE_ARRAY(ssl,"certificate request context",-((1<<7)-1),0, data, NULL);
+    }
     SSL_DECODE_UINT24(ssl,"certificates len",0,data,&len);
 
     json_object_object_add(jobj, "cert_chain", json_object_new_array());
@@ -540,6 +619,20 @@ static int decode_HandshakeType_Certificate(ssl,dir,seg,data)
         0,data,&cert);
       sslx_print_certificate(ssl,&cert,P_ND);
       len-=(cert.len + 3);
+      if (ssl->version==TLSV13_VERSION) { // TLS 1.3 has certificates
+        SSL_DECODE_UINT16(ssl,"certificate extensions len",0,data,&exlen);
+        len-=2;
+     	while (exlen) {
+     	  SSL_DECODE_UINT16(ssl, "extension type", 0, data, &ex);
+		  len -= (2+ex);
+     	  if (ssl_decode_switch(ssl, extension_decoder, ex, dir, seg, data) == R_NOT_FOUND) {
+     	    decode_extension(ssl, dir, seg, data);
+     	    P_(P_RH) { explain(ssl, "Extension type: %u not yet implemented in ssldump\n", ex); }
+     	    continue;
+     	  }
+     	  LF;
+     	}
+      }
     }
 
     return(0);
@@ -650,6 +743,7 @@ static int decode_HandshakeType_CertificateVerify(ssl,dir,seg,data)
 
 
   int r;
+  UINT4 signature_type;
 
     struct json_object *jobj;
     jobj = ssl->cur_json_st;
@@ -657,6 +751,9 @@ static int decode_HandshakeType_CertificateVerify(ssl,dir,seg,data)
 
   LF;
   ssl_update_handshake_messages(ssl,data);
+  if (ssl->version == TLSV13_VERSION) {
+    SSL_DECODE_UINT16(ssl,"signature_type",P_HL,data,&signature_type);
+  }
   SSL_DECODE_OPAQUE_ARRAY(ssl,"Signature",-((1<<15)-1),P_HL,data,0);
   return(0);
 
@@ -732,9 +829,21 @@ static int decode_HandshakeType_Finished(ssl,dir,seg,data)
        break;
    }
 
+   ssl_process_handshake_finished(ssl,ssl->decoder,data);
    return (0);
 
   }
+
+static int decode_HandshakeType_KeyUpdate(ssl,dir,seg,data)
+	ssl_obj *ssl;
+	int dir;
+	segment *seg;
+	Data *data;
+{
+	ssl_tls13_update_keying_material(ssl, ssl->decoder, dir);
+	return 0;
+}
+
 decoder HandshakeType_decoder[]={
 	{
 		0,
@@ -750,6 +859,16 @@ decoder HandshakeType_decoder[]={
 		2,
 		"ServerHello",
 		decode_HandshakeType_ServerHello
+	},
+	{
+		4,
+		"SessionTicket",
+		decode_HandshakeType_SessionTicket
+	},
+	{
+		8,
+		"EncryptedExtensions",
+		decode_HandshakeType_EncryptedExtensions
 	},
 	{
 		11,
@@ -785,6 +904,11 @@ decoder HandshakeType_decoder[]={
 		20,
 		"Finished",
 		decode_HandshakeType_Finished
+	},
+	{
+		24,
+		"KeyUpdate",
+		decode_HandshakeType_KeyUpdate
 	},
 {-1}
 };
@@ -2839,6 +2963,18 @@ static int decode_extension(ssl,dir,seg,data)
     return(0);
   }
 
+decoder supported_groups_decoder[] = {
+	{0x0017,"secp256r1",0},
+	{0x0018,"secp384r1",0},
+	{0x0019,"secp521r1",0},
+	{0x001d,"x25519",0},
+	{0x001e,"x448",0},
+	{0x0100,"ffdhe2048",0},
+	{0x0101,"ffdhe3072",0},
+	{0x0102,"ffdhe4096",0},
+	{0x0103,"ffdhe6144",0},
+	{0x0104,"ffdhe8192",0},
+};
 // Extension #10 supported_groups (renamed from "elliptic_curves")
 static int decode_extension_supported_groups(ssl,dir,seg,data)
   ssl_obj *ssl;
@@ -2856,7 +2992,8 @@ static int decode_extension_supported_groups(ssl,dir,seg,data)
       LF;
       while(l) {
 	p=data->len;
-	SSL_DECODE_UINT16(ssl, "supported group", 0, data, &g);
+    SSL_DECODE_ENUM(ssl,"supported group",2,supported_groups_decoder,SSL_PRINT_ALL,data,&g);
+	LF;
         if(!ja3_ec_str)
             ja3_ec_str = calloc(7, 1);
         else
@@ -2875,6 +3012,11 @@ static int decode_extension_supported_groups(ssl,dir,seg,data)
     return(0);
   }
 
+decoder ec_point_formats_decoder[] = {
+	{0,"uncompressed",0,},
+	{1,"ansiX962_compressed_prime",0,},
+	{2,"ansiX962_compressed_char2",0,}
+};
 // Extension #11 ec_point_formats
 static int decode_extension_ec_point_formats(ssl,dir,seg,data)
   ssl_obj *ssl;
@@ -2892,7 +3034,8 @@ static int decode_extension_ec_point_formats(ssl,dir,seg,data)
       LF;
       while(l) {
 	p=data->len;
-	SSL_DECODE_UINT8(ssl, "ec point format", 0, data, &f);
+    SSL_DECODE_ENUM(ssl,"ec point format",1,ec_point_formats_decoder,SSL_PRINT_ALL,data, &f);
+	LF;
         if(!ja3_ecp_str)
             ja3_ecp_str = calloc(5, 1);
         else
@@ -2912,289 +3055,381 @@ static int decode_extension_ec_point_formats(ssl,dir,seg,data)
     return(0);
   }
 
+static int decode_extension_supported_versions(ssl,dir,seg,data)
+  ssl_obj *ssl;
+  int dir;
+  segment *seg;
+  Data *data;
+{
+    int r;
+    UINT4 len, version;
+    SSL_DECODE_UINT16(ssl, "extensions length", 0, data, &len);
+    LF;
+    if (dir == DIR_I2R) SSL_DECODE_UINT8(ssl, "supported versions length", 0, data, &len);//client sends extension<..>
+    while (len) {
+        SSL_DECODE_UINT16(ssl, "supported version", 0, data, &version);
+        explain(ssl, "version: %u.%u", (version>>8)&0xff, version&0xff);
+        len -= 2;
+		if (len) printf("\n");
+    }
+    if (dir == DIR_R2I) ssl->version = version; // Server sets the tls version
+}
+
+decoder tls13_certificate_types[] = {
+	{
+		0,
+		"x509",
+		0,
+	},
+	{
+		1,
+		"openpgp",
+		0,
+	},
+	{
+		2,
+		"raw public key",
+		0,
+	},
+	{
+		3,
+		"1609 dot 2",
+		0,
+	}
+};
+
+static int decode_extension_client_certificate_type(ssl,dir,seg,data)
+  ssl_obj *ssl;
+  int dir;
+  segment *seg;
+  Data *data;
+{
+    int r;
+    UINT4 len, certificate_type;
+    SSL_DECODE_UINT16(ssl, "extensions length", 0, data, &len);
+    LF;
+    if (dir == DIR_I2R) SSL_DECODE_UINT8(ssl, "client certificates length", 0, data, &len);//client sends certificates<..>
+    while (len) {
+        SSL_DECODE_ENUM(ssl,"certificate type",1,tls13_certificate_types,SSL_PRINT_ALL,data, &certificate_type);
+        len -= 1;
+		data += 1;
+		if (len) printf("\n");
+    }
+    if (dir == DIR_R2I) ssl->extensions->client_certificate_type = certificate_type; // Server sets the client_certificate_type
+}
+
+static int decode_extension_server_certificate_type(ssl,dir,seg,data)
+  ssl_obj *ssl;
+  int dir;
+  segment *seg;
+  Data *data;
+{
+    int r;
+    UINT4 len, certificate_type;
+    SSL_DECODE_UINT16(ssl, "extensions length", 0, data, &len);
+    LF;
+    if (dir == DIR_I2R) SSL_DECODE_UINT8(ssl, "server certificates length", 0, data, &len);//client sends certificates<..>
+    while (len) {
+        SSL_DECODE_ENUM(ssl,"certificate type",1,tls13_certificate_types,SSL_PRINT_ALL,data, &certificate_type);
+        len -= 1;
+		data += 1;
+		if (len) printf("\n");
+    }
+    if (dir == DIR_R2I) ssl->extensions->server_certificate_type = certificate_type; // Server sets the server_certificate_type
+}
+
 decoder extension_decoder[] = {
 	{
 		0,
 		"server_name",
-		decode_extension_server_name,
-	},
-	{
-		1,
-		"max_fragment_length",
-		decode_extension
-	},
-	{
-		2,
-		"client_certificate_url",
-		decode_extension
-	},
-	{
-		3,
-		"trusted_ca_keys",
-		decode_extension
-	},
-	{
-		4,
-		"truncated_hmac",
-		decode_extension
-	},
-	{
-		5,
-		"status_request",
-		decode_extension
-	},
-        {
-                6,
-                "user_mapping",
-                decode_extension
-        },
-        {
-                7,
-                "client_authz",
-                decode_extension
-        },
-        {
-                8,
-                "server_authz",
-                decode_extension
-        },
-        {
-                9,
-                "cert_type",
-                decode_extension
-        },
-        {
-                10,
-                "supported_groups",
-                decode_extension_supported_groups
-        },
-        {
-                11,
-                "ec_point_formats",
-                decode_extension_ec_point_formats
-        },
-        {
-                12,
-                "srp",
-                decode_extension
-        },
-	{
-		13,
-		"signature_algorithms",
-		decode_extension
-	},
-        {
-                14,
-                "use_srtp",
-                decode_extension
-        },
-        {
-                15,
-                "heartbeat",
-                decode_extension
-        },
-	{
-		16,
-		"application_layer_protocol_negotiation",
-		decode_extension
-	},
-        {
-                17,
-                "status_request_v2",
-                decode_extension
-        },
-        {
-                18,
-                "signed_certificate_timestamp",
-                decode_extension
-        },
-        {
-                19,
-                "client_certificate_type",
-                decode_extension
-        },
-        {
-                20,
-                "server_certificate_type",
-                decode_extension
-        },
-        {
-                21,
-                "padding",
-                decode_extension
-        },
-	{
-		22,
-		"encrypt_then_mac",
-		decode_extension_encrypt_then_mac
-	},
-	{
-		23,
-		"extended_master_secret",
-		decode_extension_extended_master_secret
-	},
-        {
-                24,
-                "token_binding",
-                decode_extension
-        },
-        {
-                25,
-                "cached_info",
-                decode_extension
-        },
-        {
-                26,
-                "tls_lts",
-                decode_extension
-        },
-        {
-                27,
-                "compress_certificate",
-                decode_extension
-        },
-        {
-                28,
-                "record_size_limit",
-                decode_extension
-        },
-        {
-                29,
-                "pwd_protect",
-                decode_extension
-        },
-        {
-                30,
-                "pwd_clear",
-                decode_extension
-        },
-        {
-                31,
-                "password_salt",
-                decode_extension
-        },
-        {
-                32,
-                "ticket_pinning",
-                decode_extension
-        },
-        {
-                33,
-                "tls_cert_with_extern_psk",
-                decode_extension
-        },
-        {
-                34,
-                "delegated_credentials",
-                decode_extension
-        },
-        {
-                35,
-                "session_ticket",
-                decode_extension
-        },
-        {
-                36,
-                "TLMSP",
-                decode_extension
-        },
-        {
-                37,
-                "TLMSP_proxying",
-                decode_extension
-        },
-        {
-                38,
-                "TLMSP_delegate",
-                decode_extension
-        },
-        {
-                39,
-                "supported_ekt_ciphers",
-                decode_extension
-        },
-        {
-                41,
-                "pre_shared_key",
-                decode_extension
-        },
-        {
-                42,
-                "early_data",
-                decode_extension
-        },
-        {
-                43,
-                "supported_versions",
-                decode_extension
-        },
-        {
-                44,
-                "cookie",
-                decode_extension
-        },
-        {
-                45,
-                "psk_key_exchange_modes",
-                decode_extension
-        },
-        {
-                47,
-                "certificate_authorities",
-                decode_extension
-        },
-        {
-                48,
-                "oid_filters",
-                decode_extension
-        },
-        {
-                49,
-                "post_handshake_auth",
-                decode_extension
-        },
-        {
-                50,
-                "signature_algorithms_cert",
-                decode_extension
-        },
-        {
-                51,
-                "key_share",
-                decode_extension
-        },
-        {
-                52,
-                "transparency_info",
-                decode_extension
-        },
-        {
-                53,
-                "connection_id",
-                decode_extension
-        },
-        {
-                55,
-                "external_id_hash",
-                decode_extension
-        },
-        {
-                56,
-                "external_session_id",
-                decode_extension
-        },
-	{
-		13172,
-		"next_protocol_negotiation",
-		decode_extension
-	},
-	{
-		0xff01,
-		"renegotiation_info",
-		decode_extension
-	},
-
-{-1}
+			decode_extension_server_name,
+		},
+		{
+			1,
+			"max_fragment_length",
+			decode_extension
+		},
+		{
+			2,
+			"client_certificate_url",
+			decode_extension
+		},
+		{
+			3,
+			"trusted_ca_keys",
+			decode_extension
+		},
+		{
+			4,
+			"truncated_hmac",
+			decode_extension
+		},
+		{
+			5,
+			"status_request",
+			decode_extension
+		},
+			{
+					6,
+					"user_mapping",
+					decode_extension
+			},
+			{
+					7,
+					"client_authz",
+					decode_extension
+			},
+			{
+					8,
+					"server_authz",
+					decode_extension
+			},
+			{
+					9,
+					"cert_type",
+					decode_extension
+			},
+			{
+					10,
+					"supported_groups",
+					decode_extension_supported_groups
+			},
+			{
+					11,
+					"ec_point_formats",
+					decode_extension_ec_point_formats
+			},
+			{
+					12,
+					"srp",
+					decode_extension
+			},
+		{
+			13,
+			"signature_algorithms",
+			decode_extension
+		},
+			{
+					14,
+					"use_srtp",
+					decode_extension
+			},
+			{
+					15,
+					"heartbeat",
+					decode_extension
+			},
+		{
+			16,
+			"application_layer_protocol_negotiation",
+			decode_extension
+		},
+			{
+					17,
+					"status_request_v2",
+					decode_extension
+			},
+			{
+					18,
+					"signed_certificate_timestamp",
+					decode_extension
+			},
+			{
+					19,
+					"client_certificate_type",
+					decode_extension
+			},
+			{
+					20,
+					"server_certificate_type",
+					decode_extension
+			},
+			{
+					21,
+					"padding",
+					decode_extension
+			},
+		{
+			22,
+			"encrypt_then_mac",
+			decode_extension_encrypt_then_mac
+		},
+		{
+			23,
+			"extended_master_secret",
+			decode_extension_extended_master_secret
+		},
+			{
+					24,
+					"token_binding",
+					decode_extension
+			},
+			{
+					25,
+					"cached_info",
+					decode_extension
+			},
+			{
+					26,
+					"tls_lts",
+					decode_extension
+			},
+			{
+					27,
+					"compress_certificate",
+					decode_extension
+			},
+			{
+					28,
+					"record_size_limit",
+					decode_extension
+			},
+			{
+					29,
+					"pwd_protect",
+					decode_extension
+			},
+			{
+					30,
+					"pwd_clear",
+					decode_extension
+			},
+			{
+					31,
+					"password_salt",
+					decode_extension
+			},
+			{
+					32,
+					"ticket_pinning",
+					decode_extension
+			},
+			{
+					33,
+					"tls_cert_with_extern_psk",
+					decode_extension
+			},
+			{
+					34,
+					"delegated_credentials",
+					decode_extension
+			},
+			{
+					35,
+					"session_ticket",
+					decode_extension
+			},
+			{
+					36,
+					"TLMSP",
+					decode_extension
+			},
+			{
+					37,
+					"TLMSP_proxying",
+					decode_extension
+			},
+			{
+					38,
+					"TLMSP_delegate",
+					decode_extension
+			},
+			{
+					39,
+					"supported_ekt_ciphers",
+					decode_extension
+			},
+			{
+					41,
+					"pre_shared_key",
+					decode_extension
+			},
+			{
+					42,
+					"early_data",
+					decode_extension
+			},
+			{
+					43,
+					"supported_versions",
+					decode_extension_supported_versions
+			},
+			{
+					44,
+					"cookie",
+					decode_extension
+			},
+			{
+					45,
+					"psk_key_exchange_modes",
+					decode_extension
+			},
+			{
+					47,
+					"certificate_authorities",
+					decode_extension
+			},
+			{
+					48,
+					"oid_filters",
+					decode_extension
+			},
+			{
+					49,
+					"post_handshake_auth",
+					decode_extension
+			},
+			{
+					50,
+					"signature_algorithms_cert",
+					decode_extension
+			},
+			{
+					51,
+					"key_share",
+					decode_extension
+			},
+			{
+					52,
+					"transparency_info",
+					decode_extension
+			},
+			{
+					53,
+					"connection_id",
+					decode_extension
+			},
+			{
+					55,
+					"external_id_hash",
+					decode_extension
+			},
+			{
+					56,
+					"external_session_id",
+					decode_extension
+			},
+		{
+			13172,
+			"next_protocol_negotiation",
+			decode_extension
+		},
+		{
+			0xff01,
+			"renegotiation_info",
+			decode_extension
+		},
+		{
+			0x19,
+			"client_certificate_type",
+			decode_extension_client_certificate_type,
+		},
+		{
+			0x20,
+			"server_certificate_type",
+			decode_extension_server_certificate_type
+		},
+	{-1}
 };
 
 static int decode_server_name_type_host_name(ssl,dir,seg,data)
