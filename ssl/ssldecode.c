@@ -328,7 +328,7 @@ int ssl_process_server_session_id(ssl,d,msg,len)
     INIT_DATA(idd,msg,len);
     
     if (ssl->version==TLSV13_VERSION){
-    // TODO: TLSv13 Session
+    // No need to save/restore session in tls1.3 since the only way of decrypting is through log file
     } else {
       /* First check to see if the client tried to restore */
       if(d->session_id){
@@ -376,7 +376,7 @@ int ssl_process_client_session_id(ssl,d,msg,len)
       //todo: better save and destroy only when successfully read key log
       r_data_destroy(&d->MS);
 
-      if(d->ctx->ssl_key_log_file && (ssl_read_key_log_file(ssl, d)==0) && d->MS) // todo: TLS 1.3 session
+      if(d->ctx->ssl_key_log_file && (ssl_read_key_log_file(ssl, d)==0) && d->MS)
       {
         //we found master secret for session in keylog
         //try to save session

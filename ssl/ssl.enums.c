@@ -520,6 +520,54 @@ static int decode_HandshakeType_ServerHello(ssl,dir,seg,data)
     return(0);
 
   }
+static int decode_HandshakeType_Certificate(ssl,dir,seg,data)
+  ssl_obj *ssl;
+  int dir;
+  segment *seg;
+  Data *data;
+  {
+    UINT4 len,exlen,ex;
+    Data cert;
+    int r;
+
+    struct json_object *jobj;
+    jobj = ssl->cur_json_st;
+    json_object_object_add(jobj, "handshake_type", json_object_new_string("Certificate"));
+    extern decoder extension_decoder[];
+
+    LF;
+    ssl_update_handshake_messages(ssl,data);
+    if (ssl->version==TLSV13_VERSION){
+      SSL_DECODE_OPAQUE_ARRAY(ssl,"certificate request context",-((1<<7)-1),0, data, NULL);
+    }
+    SSL_DECODE_UINT24(ssl,"certificates len",0,data,&len);
+
+    json_object_object_add(jobj, "cert_chain", json_object_new_array());
+
+    while(len){
+      SSL_DECODE_OPAQUE_ARRAY(ssl,"certificate",-((1<<23)-1),
+        0,data,&cert);
+      sslx_print_certificate(ssl,&cert,P_ND);
+      len-=(cert.len + 3);
+      if (ssl->version==TLSV13_VERSION) { // TLS 1.3 has certificates
+        SSL_DECODE_UINT16(ssl,"certificate extensions len",0,data,&exlen);
+        len-=2;
+     	while (exlen) {
+     	  SSL_DECODE_UINT16(ssl, "extension type", 0, data, &ex);
+		  len -= (2+ex);
+     	  if (ssl_decode_switch(ssl, extension_decoder, ex, dir, seg, data) == R_NOT_FOUND) {
+     	    decode_extension(ssl, dir, seg, data);
+     	    P_(P_RH) { explain(ssl, "Extension type: %u not yet implemented in ssldump\n", ex); }
+     	    continue;
+     	  }
+     	  LF;
+     	}
+      }
+    }
+
+    return(0);
+
+  }
 
 static int decode_HandshakeType_SessionTicket(ssl,dir,seg,data)
     ssl_obj *ssl;
@@ -590,54 +638,6 @@ static int decode_HandshakeType_EncryptedExtensions(ssl,dir,seg,data)
     }
   }
 
-static int decode_HandshakeType_Certificate(ssl,dir,seg,data)
-  ssl_obj *ssl;
-  int dir;
-  segment *seg;
-  Data *data;
-  {
-    UINT4 len,exlen,ex;
-    Data cert;
-    int r;
-
-    struct json_object *jobj;
-    jobj = ssl->cur_json_st;
-    json_object_object_add(jobj, "handshake_type", json_object_new_string("Certificate"));
-    extern decoder extension_decoder[];
-
-    LF;
-    ssl_update_handshake_messages(ssl,data);
-    if (ssl->version==TLSV13_VERSION){
-      SSL_DECODE_OPAQUE_ARRAY(ssl,"certificate request context",-((1<<7)-1),0, data, NULL);
-    }
-    SSL_DECODE_UINT24(ssl,"certificates len",0,data,&len);
-
-    json_object_object_add(jobj, "cert_chain", json_object_new_array());
-
-    while(len){
-      SSL_DECODE_OPAQUE_ARRAY(ssl,"certificate",-((1<<23)-1),
-        0,data,&cert);
-      sslx_print_certificate(ssl,&cert,P_ND);
-      len-=(cert.len + 3);
-      if (ssl->version==TLSV13_VERSION) { // TLS 1.3 has certificates
-        SSL_DECODE_UINT16(ssl,"certificate extensions len",0,data,&exlen);
-        len-=2;
-     	while (exlen) {
-     	  SSL_DECODE_UINT16(ssl, "extension type", 0, data, &ex);
-		  len -= (2+ex);
-     	  if (ssl_decode_switch(ssl, extension_decoder, ex, dir, seg, data) == R_NOT_FOUND) {
-     	    decode_extension(ssl, dir, seg, data);
-     	    P_(P_RH) { explain(ssl, "Extension type: %u not yet implemented in ssldump\n", ex); }
-     	    continue;
-     	  }
-     	  LF;
-     	}
-      }
-    }
-
-    return(0);
-
-  }
 static int decode_HandshakeType_ServerKeyExchange(ssl,dir,seg,data)
   ssl_obj *ssl;
   int dir;
@@ -840,6 +840,7 @@ static int decode_HandshakeType_KeyUpdate(ssl,dir,seg,data)
 	segment *seg;
 	Data *data;
 {
+    LF;
 	ssl_tls13_update_keying_material(ssl, ssl->decoder, dir);
 	return 0;
 }
