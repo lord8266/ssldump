@@ -3,11 +3,11 @@ Color_Off='\033[0m'       # Text Reset
 Red='\033[0;31m'          # Red
 Green='\033[0;32m'        # Green
 
-S="$(ls test/)"
+S="$(ls samples/*.pcap)"
 
 C=0
 for i in $S; do 
-	OUTPUT=$(./ssldump -jANdr test/$i -l ../tls2/openssl/demos/sslecho/keys.txt 2>&1)
+	OUTPUT=$(./ssldump -jANdr $i -l samples/log.txt 2>&1)
 	if [[ ! "$OUTPUT" == *"msg_data"* ]]; then
 		echo -e "$i ${Red}NOT OK${Color_Off}"
 	else
