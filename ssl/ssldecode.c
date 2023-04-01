@@ -402,9 +402,10 @@ int ssl_process_handshake_finished(ssl_obj* ssl,ssl_decoder *dec, Data *data){
    if (ssl->version==TLSV13_VERSION){
     if (ssl->direction==DIR_I2R){ // Change from handshake decoder to data traffic decoder
       dec->c_to_s = dec->c_to_s_n;
+      dec->c_to_s_n = 0;
+	} else {
       dec->s_to_c = dec->s_to_c_n;
       dec->s_to_c_n = 0;
-      dec->c_to_s_n = 0;
     }
    }
 }
