@@ -7,7 +7,7 @@ S="$(ls samples/*.pcap)"
 
 C=0
 for i in $S; do 
-	OUTPUT=$(./ssldump -jANdr $i -l samples/log.txt 2>&1)
+	OUTPUT=$(./ssldump -njANdr $i -l samples/log.txt 2>&1)
 	if [[ ! "$OUTPUT" == *"msg_data"* ]]; then
 		echo -e "$i ${Red}NOT OK${Color_Off}"
 	else
